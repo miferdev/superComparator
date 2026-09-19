@@ -94,6 +94,7 @@ func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
 	picker.FileAllowed = true
 	picker.DirAllowed = true
 	picker.AllowedTypes = []string{".md"}
+	picker.Styles = pickerStyles()
 
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 

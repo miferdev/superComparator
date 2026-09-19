@@ -7,103 +7,152 @@ import (
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/miferdev/superComparator/internal/core"
 	"github.com/miferdev/superComparator/internal/report"
 )
 
-var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
-	helpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	infoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-)
-
 func (m *Model) view() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("SuperComparator · Mercadona vs Ahorramas"))
-	b.WriteString("\n\n")
+	b.WriteString(titleBarStyle.Render(" SuperComparator "))
+	b.WriteString(" ")
+	b.WriteString(subtitleStyle.Render("Mercadona vs Ahorramas"))
+	b.WriteString("\n")
+	if hint := m.screenHint(); hint != "" {
+		b.WriteString(hintStyle.Render(hint))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 
 	switch m.screen {
 	case screenPicker:
-		b.WriteString("Elige tu lista de la compra (tabla markdown de dos columnas):\n\n")
 		b.WriteString(m.picker.View())
 	case screenList:
 		if len(m.items) == 0 {
-			b.WriteString("No hay productos en la lista.\n")
+			b.WriteString(dimStyle.Render("No hay productos en la lista."))
 		} else {
 			b.WriteString(m.table.View())
 		}
 	case screenProgress:
-		fmt.Fprintf(&b, "%s Trabajando…\n\n", m.spinner.View())
-		b.WriteString(strings.Join(m.logLines, "\n"))
+		fmt.Fprintf(&b, "%s %s\n\n", m.spinner.View(), accentStyle.Render("Trabajando…"))
+		for i, line := range m.logLines {
+			style := dimStyle
+			if i == len(m.logLines)-1 {
+				style = accentStyle
+			}
+			b.WriteString(style.Render(line) + "\n")
+		}
 	case screenCompare:
 		if len(m.cmp.Items) == 0 {
-			b.WriteString("No hay productos resueltos todavía. Pulsa 'r' en la lista para resolver.\n")
+			b.WriteString(dimStyle.Render("No hay productos resueltos todavía. Pulsa 'r' en la lista para resolver."))
 		} else {
 			b.WriteString(m.table.View())
 			b.WriteString("\n")
 			b.WriteString(m.totalsView())
-			fmt.Fprintf(&b, "\nInforme escrito en %s\n", m.cfg.ReportPath)
 		}
 	case screenHistory:
 		if len(m.changes) == 0 {
-			b.WriteString("No hay cambios de precio registrados todavía.\n")
+			b.WriteString(dimStyle.Render("No hay cambios de precio registrados todavía."))
 		} else {
 			b.WriteString(m.table.View())
 		}
 	case screenReview:
-		fmt.Fprintf(&b, "Alternativas para %q:\n\n", m.review)
+		b.WriteString(dimStyle.Render(fmt.Sprintf("Alternativas para %q:", m.review)) + "\n\n")
 		for i, opt := range m.options {
-			fmt.Fprintf(&b, "  %d. [%s] %s  (%.2f)\n", i+1, report.ChainName(opt.ChainID), opt.Name, opt.Score)
+			num := helpKeyStyle.Render(fmt.Sprintf("%d", i+1))
+			chain := accentStyle.Render(report.ChainName(opt.ChainID))
+			score := dimStyle.Render(fmt.Sprintf("%.2f", opt.Score))
+			fmt.Fprintf(&b, "  %s  %s  %s  %s\n", num, chain, opt.Name, score)
 		}
 	}
 
 	if m.message != "" {
-		b.WriteString("\n" + infoStyle.Render(m.message) + "\n")
+		b.WriteString("\n" + hintStyle.Render(m.message) + "\n")
 	}
-	b.WriteString("\n" + helpStyle.Render(m.help()))
+	b.WriteString("\n" + m.helpView())
 	return b.String()
 }
 
-func (m *Model) help() string {
+func (m *Model) screenHint() string {
 	switch m.screen {
 	case screenPicker:
-		return "enter: elegir fichero · ↑/↓: moverse · q: salir"
+		return "Elige tu lista de la compra (tabla markdown de dos columnas)"
 	case screenList:
-		return "r: resolver · c: comparar · h: historial · enter: alternativas · q: salir"
+		return fmt.Sprintf("%d productos · pulsa r para resolver y c para comparar", len(m.items))
 	case screenProgress:
-		return "resolviendo, espera…"
+		return "Consultando Mercadona y Ahorramas"
 	case screenCompare:
-		return "esc o q: volver a la lista"
+		return "Totales por cadena y opción más barata de cada producto"
 	case screenHistory:
-		return "esc o q: volver a la lista"
+		return "Cambios de precio y descatalogados"
 	case screenReview:
-		return "1-9: elegir alternativa · esc: volver"
+		return "Elige otra opción para este producto"
+	}
+	return ""
+}
+
+func (m *Model) helpView() string {
+	switch m.screen {
+	case screenPicker:
+		return helpLine(
+			helpBinding{"enter", "elegir"},
+			helpBinding{"↑/↓", "moverse"},
+			helpBinding{"←", "atrás"},
+			helpBinding{"q", "salir"},
+		)
+	case screenList:
+		return helpLine(
+			helpBinding{"r", "resolver"},
+			helpBinding{"c", "comparar"},
+			helpBinding{"h", "historial"},
+			helpBinding{"enter", "alternativas"},
+			helpBinding{"q", "salir"},
+		)
+	case screenProgress:
+		return helpLine(helpBinding{"ctrl+c", "salir"})
+	case screenCompare:
+		return helpLine(helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
+	case screenHistory:
+		return helpLine(helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
+	case screenReview:
+		return helpLine(helpBinding{"1-9", "elegir"}, helpBinding{"esc", "volver"})
 	}
 	return ""
 }
 
 func (m *Model) totalsView() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Totales") + "\n")
+	var lines []string
 	for _, chainID := range m.cmp.Chains {
-		if total, ok := m.cmp.Totals[chainID]; ok {
-			fmt.Fprintf(&b, "  %-12s %s\n", report.ChainName(chainID), money(total))
+		total, ok := m.cmp.Totals[chainID]
+		if !ok || total == 0 {
+			continue
 		}
+		label := fmt.Sprintf("%-12s %8s", report.ChainName(chainID), money(total))
+		if chainID == m.cmp.CheapestChain {
+			lines = append(lines, okStyle.Render(label+"  ← más barata"))
+			continue
+		}
+		lines = append(lines, label)
 	}
-	fmt.Fprintf(&b, "  %-12s %s\n", "Mixta", money(m.cmp.MixedTotal))
-	if m.cmp.CheapestChain != "" {
-		fmt.Fprintf(&b, "\n  Cadena más barata: %s (ahorro %s)\n",
-			report.ChainName(m.cmp.CheapestChain), money(m.cmp.MaxSaving))
+	lines = append(lines, fmt.Sprintf("%-12s %8s", "Mixta", money(m.cmp.MixedTotal)))
+
+	out := boxStyle.Render(strings.Join(lines, "\n"))
+	if m.cmp.CheapestChain != "" && m.cmp.MaxSaving > 0 {
+		out += "\n" + hintStyle.Render("Ahorro máximo: ") + okStyle.Render(money(m.cmp.MaxSaving))
 	}
-	return b.String()
+	return out
 }
 
 func (m *Model) refreshItems() {
 	rows := make([]table.Row, 0, len(m.items))
 	for _, it := range m.items {
-		rows = append(rows, table.Row{it.Name, fmt.Sprintf("%d", it.Quantity), m.status[it.Name], m.notes[it.Name]})
+		status := m.status[it.Name]
+		rows = append(rows, table.Row{
+			it.Name,
+			fmt.Sprintf("%d", it.Quantity),
+			statusStyle(status).Render(status),
+			dimStyle.Render(m.notes[it.Name]),
+		})
 	}
 	m.table.SetRows(nil)
 	m.table.SetColumns([]table.Column{
@@ -123,7 +172,7 @@ func (m *Model) refreshCompare() {
 		for _, chainID := range m.cmp.Chains {
 			row = append(row, optionCell(item, chainID))
 		}
-		row = append(row, report.ChainName(item.Cheapest))
+		row = append(row, okStyle.Render(report.ChainName(item.Cheapest)))
 		rows = append(rows, row)
 	}
 	cols := []table.Column{
@@ -145,16 +194,24 @@ func optionCell(item core.ItemComparison, chainID string) string {
 		if opt.Chain != chainID || opt.Price <= 0 {
 			continue
 		}
-		cell := money(opt.Price)
+		cell := opt.Product
 		if opt.MeasurePrice > 0 {
-			cell += fmt.Sprintf(" · %s/%s", money(opt.MeasurePrice), opt.MeasureUnit)
+			cell += fmt.Sprintf(" (%s · %s/%s)", money(opt.Price), money(opt.MeasurePrice), opt.MeasureUnit)
+		} else {
+			cell += fmt.Sprintf(" (%s)", money(opt.Price))
 		}
 		if opt.Promo {
 			cell += " · oferta"
 		}
+		if opt.Chain == item.Cheapest {
+			return okStyle.Render(cell)
+		}
+		if opt.Promo {
+			return warnStyle.Render(cell)
+		}
 		return cell
 	}
-	return "—"
+	return dimStyle.Render("—")
 }
 
 func (m *Model) refreshHistory() {
@@ -163,9 +220,9 @@ func (m *Model) refreshHistory() {
 		rows = append(rows, table.Row{
 			report.ChainName(c.Chain),
 			c.Name,
-			money(c.OldPrice),
-			money(c.NewPrice),
-			c.FetchedAt.Format(time.DateTime),
+			errStyle.Render(money(c.OldPrice)),
+			okStyle.Render(money(c.NewPrice)),
+			dimStyle.Render(c.FetchedAt.Format(time.DateTime)),
 		})
 	}
 	m.table.SetRows(nil)
@@ -206,11 +263,4 @@ func clamp(v, lo, hi int) int {
 
 func money(v float64) string {
 	return strings.Replace(fmt.Sprintf("%.2f", v), ".", ",", 1) + " €"
-}
-
-func tableStyles() table.Styles {
-	s := table.DefaultStyles()
-	s.Header = s.Header.Bold(true).Foreground(lipgloss.Color("111"))
-	s.Selected = s.Selected.Foreground(lipgloss.Color("229"))
-	return s
 }
