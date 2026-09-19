@@ -26,7 +26,7 @@ func (m *Model) view() string {
 
 	switch m.screen {
 	case screenPicker:
-		b.WriteString(m.picker.View())
+		b.WriteString(m.browser.view())
 	case screenList:
 		if len(m.items) == 0 {
 			b.WriteString(dimStyle.Render("No hay productos en la lista."))
@@ -95,9 +95,9 @@ func (m *Model) helpView() string {
 	switch m.screen {
 	case screenPicker:
 		return helpLine(
-			helpBinding{"enter", "elegir"},
+			helpBinding{"enter", "abrir/elegir"},
 			helpBinding{"↑/↓", "moverse"},
-			helpBinding{"←", "atrás"},
+			helpBinding{"←", "subir"},
 			helpBinding{"q", "salir"},
 		)
 	case screenList:
@@ -111,9 +111,9 @@ func (m *Model) helpView() string {
 	case screenProgress:
 		return helpLine(helpBinding{"ctrl+c", "salir"})
 	case screenCompare:
-		return helpLine(helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
+		return helpLine(helpBinding{"↑/↓", "moverse"}, helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
 	case screenHistory:
-		return helpLine(helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
+		return helpLine(helpBinding{"↑/↓", "moverse"}, helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
 	case screenReview:
 		return helpLine(helpBinding{"1-9", "elegir"}, helpBinding{"esc", "volver"})
 	}

@@ -3,7 +3,6 @@ package tui
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/filepicker"
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
 )
@@ -18,12 +17,13 @@ var (
 	colMuted   = lipgloss.Color("#7A7A7A")
 	colWhite   = lipgloss.Color("#F2F2F2")
 
-	titleBarStyle = lipgloss.NewStyle().Bold(true).Foreground(colWhite).Background(colAccent).Padding(0, 1)
-	subtitleStyle = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
-	hintStyle     = lipgloss.NewStyle().Foreground(colMuted)
-	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colAccent2).Padding(0, 1)
-	helpKeyStyle  = lipgloss.NewStyle().Bold(true).Foreground(colAccent2)
-	helpTextStyle = lipgloss.NewStyle().Foreground(colMuted)
+	titleBarStyle    = lipgloss.NewStyle().Bold(true).Foreground(colWhite).Background(colAccent).Padding(0, 1)
+	selectedRowStyle = lipgloss.NewStyle().Bold(true).Foreground(colWhite).Background(colAccent).Padding(0, 1)
+	subtitleStyle    = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
+	hintStyle        = lipgloss.NewStyle().Foreground(colMuted)
+	boxStyle         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colAccent2).Padding(0, 1)
+	helpKeyStyle     = lipgloss.NewStyle().Bold(true).Foreground(colAccent2)
+	helpTextStyle    = lipgloss.NewStyle().Foreground(colMuted)
 
 	okStyle      = lipgloss.NewStyle().Foreground(colGreen).Bold(true)
 	warnStyle    = lipgloss.NewStyle().Foreground(colYellow)
@@ -57,19 +57,6 @@ func tableStyles() table.Styles {
 		BorderBottomForeground(colMuted)
 	s.Cell = s.Cell.Padding(0, 1)
 	s.Selected = s.Selected.Foreground(colWhite).Background(colAccent).Bold(true)
-	return s
-}
-
-func pickerStyles() filepicker.Styles {
-	s := filepicker.DefaultStyles()
-	s.Cursor = s.Cursor.Foreground(colAccent)
-	s.Directory = lipgloss.NewStyle().Foreground(colAccent2).Bold(true)
-	s.File = lipgloss.NewStyle().Foreground(colWhite)
-	s.Selected = lipgloss.NewStyle().Foreground(colWhite).Background(colAccent).Bold(true)
-	s.DisabledFile = lipgloss.NewStyle().Foreground(colMuted)
-	s.Permission = lipgloss.NewStyle().Foreground(colMuted)
-	s.FileSize = lipgloss.NewStyle().Foreground(colMuted)
-	s.EmptyDirectory = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
 	return s
 }
 

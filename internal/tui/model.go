@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"charm.land/bubbles/v2/filepicker"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
@@ -69,7 +68,7 @@ type Model struct {
 	width  int
 	height int
 
-	picker  filepicker.Model
+	browser browser
 	spinner spinner.Model
 	table   table.Model
 
@@ -89,13 +88,6 @@ type Model struct {
 }
 
 func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
-	picker := filepicker.New()
-	picker.CurrentDirectory = cfg.ListaDir
-	picker.FileAllowed = true
-	picker.DirAllowed = true
-	picker.AllowedTypes = []string{".md"}
-	picker.Styles = pickerStyles()
-
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 
 	m := Model{
@@ -103,7 +95,7 @@ func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
 		core:    c,
 		log:     log,
 		screen:  screenPicker,
-		picker:  picker,
+		browser: newBrowser(cfg.ListaDir),
 		spinner: sp,
 		table:   table.New(table.WithFocused(true), table.WithStyles(tableStyles())),
 		status:  map[string]string{},
@@ -122,9 +114,6 @@ func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.screen == screenPicker {
-		return m.picker.Init()
-	}
 	return nil
 }
 
@@ -142,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.picker.SetHeight(clamp(msg.Height-8, 5, 40))
+		m.browser.height = clamp(msg.Height-10, 5, 30)
 		m.table.SetWidth(clamp(msg.Width-4, 40, 200))
 		m.table.SetHeight(clamp(msg.Height-8, 5, 60))
 		return m, nil
@@ -205,17 +194,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.screen {
 	case screenPicker:
-		var cmd tea.Cmd
-		m.picker, cmd = m.picker.Update(msg)
-		if ok, path := m.picker.DidSelectFile(msg); ok {
+		if path, ok := m.browser.update(msg); ok {
 			if err := m.loadList(path); err != nil {
 				m.message = err.Error()
-				return m, cmd
+				return m, nil
 			}
 			m.screen = screenList
 			m.message = ""
 		}
-		return m, cmd
+		return m, nil
 	case screenList:
 		if key, ok := keyOf(msg); ok {
 			switch key {
@@ -265,8 +252,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key, ok := keyOf(msg); ok && (key == "esc" || key == "q") {
 			m.screen = screenList
 			m.refreshItems()
+			return m, nil
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.table, cmd = m.table.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
