@@ -1,52 +1,87 @@
 # SuperComparator
 
-Comparador de precios entre **Mercadona** y **Ahorramas** a partir de tu lista
-de la compra en markdown. Resuelve cada producto, compara por unidad y por peso
+Comparador de precios de la compra entre **Mercadona** y **Ahorramas** a partir
+de una lista en markdown. Resuelve cada producto, compara por unidad y por peso
 (€/kg, €/L) y detecta cambios de precio, ofertas y productos descatalogados.
-
-> Estado: **F0 (scaffold)**. La funcionalidad llega en las siguientes fases.
 
 ## Tu lista (`lista.md`)
 
 Una tabla markdown de dos columnas: producto y cantidad. Si la cantidad está
-vacía, se asume **1 unidad**.
+vacía o no tiene número, se asume **1 unidad**.
 
 ```md
-| Producto        | Cantidad |
-| --------------- | -------- |
-| Leche entera 1L | 3        |
-| Pan de molde    |          |
-| Champú          | 1        |
+| Producto         | Cantidad |
+| ---------------- | -------- |
+| Leche entera 1L  | 3        |
+| Pan de molde     |          |
+| Champú           | 1        |
 ```
 
-El fichero `lista.md` se ignora en git (es tuya y personal); tienes un ejemplo
-en `lista.ejemplo.md`.
+Deja `lista.md` en la raíz del repositorio (junto a `compose.yml`). Tienes un
+ejemplo en `lista.ejemplo.md`. El fichero personal se ignora en git.
 
-## Uso previsto
+## Uso con Docker
 
 ```sh
 docker compose up
 ```
 
-La TUI abre un selector para elegir tu `lista.md`, resuelve los productos y
-muestra la comparativa. El historial y el informe quedan en `./datos/`.
+La primera vez construye la imagen. Después, la TUI abre un selector para elegir
+tu `lista.md` y estos atajos:
 
-## Stack
+- `r` — resuelve los productos en ambas cadenas (muestra el progreso).
+- `c` — comparativa: total por cadena, ganador por producto y compra mixta.
+- `h` — historial de cambios de precio y descatalogados.
+- `enter` — ver alternativas de un producto con confianza baja y elegir otra.
+- `q` — salir.
 
-- **Go 1.27** con **Bubble Tea v2** para la TUI (en español).
-- **rod** (headless Chromium) para Mercadona; **HTTP + JSON-LD** para Ahorramas.
-- **SQLite** (modernc, sin cgo) para historial de precios.
-- Docker con `chromedp/headless-shell`.
+El historial y el informe quedan en `./datos/` (`precios.db` e `informe.md`).
+Para un re-chequeo sin interfaz (cron):
+
+```sh
+docker compose run --rm app check
+```
+
+## Uso local (sin Docker)
+
+Requiere Go 1.27 y un Chromium/Chrome instalado. Si no está en el `PATH`:
+
+```sh
+SUPERCOMPARATOR_BROWSER_BIN=/ruta/a/chrome go run ./cmd/supercomparator
+go run ./cmd/supercomparator check
+```
+
+## Configuración (variables de entorno)
+
+| Variable                     | Por defecto            | Descripción                          |
+| ---------------------------- | ---------------------- | ------------------------------------ |
+| `SUPERCOMPARATOR_CP`         | `28032`                | Código postal para Mercadona         |
+| `SUPERCOMPARATOR_LISTA`      | (vacío)                | Ruta de `lista.md` (omite el selector) |
+| `SUPERCOMPARATOR_LISTA_DIR`  | `/compras` o `.`       | Carpeta que abre el selector         |
+| `SUPERCOMPARATOR_DB`         | `datos/precios.db`     | Base SQLite                          |
+| `SUPERCOMPARATOR_REPORT`     | `datos/informe.md`     | Informe markdown                     |
+| `SUPERCOMPARATOR_WORKERS`    | `3`                    | Peticiones en paralelo               |
+| `SUPERCOMPARATOR_DELAY_MS`   | `300`                  | Pausa entre peticiones               |
+| `SUPERCOMPARATOR_CANDIDATES` | `3`                    | Candidatos por cadena                |
+| `SUPERCOMPARATOR_BROWSER_BIN`| (auto)                 | Binario de Chromium                  |
 
 ## Desarrollo
 
 ```sh
-go build ./...
-go test ./...
-go vet ./...
+make test              # tests unitarios
+make test-integration  # tests con red (opcional)
+make build
 ```
+
+El diseño y el orden de lectura del código están en [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Scraping responsable
+
+Solo se acceden a rutas permitidas por el `robots.txt` de cada cadena:
+`sitemap.xml` y fichas de producto. Nunca a sus endpoints de búsqueda o API
+interna. Concurrencia máxima 3 y pausas entre peticiones. Proyecto personal y
+educativo: las webs pueden cambiar y el scraper deberá adaptarse.
 
 ## Licencia
 
-MIT. Uso personal y educativo: el scraper solo accede a rutas permitidas por
-el `robots.txt` de cada cadena (sitemaps y fichas de producto).
+MIT.
