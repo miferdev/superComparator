@@ -128,6 +128,16 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := keyOf(msg); ok {
+		switch key {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "q":
+			if m.screen == screenPicker {
+				return m, tea.Quit
+			}
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
