@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    image: supercomparator:latest
+    init: true
+    stdin_open: true
+    tty: true
+    shm_size: "1gb"
+    environment:
+      SUPERCOMPARATOR_CP: "28032"
+      SUPERCOMPARATOR_LISTA_DIR: /compras
+      SUPERCOMPARATOR_DB: /datos/precios.db
+      SUPERCOMPARATOR_REPORT: /datos/informe.md
+    volumes:
+      - .:/compras:ro
+      - ./datos:/datos
