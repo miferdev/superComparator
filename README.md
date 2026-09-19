@@ -23,11 +23,13 @@ ejemplo en `lista.ejemplo.md`. El fichero personal se ignora en git.
 ## Uso con Docker
 
 ```sh
-docker compose up
+docker compose run --rm app
 ```
 
-La primera vez construye la imagen. Después, la TUI abre un selector para elegir
-tu `lista.md` y estos atajos:
+La primera vez construye la imagen. Nota: `docker compose up` no adjunta la
+entrada estándar (está pensado para logs de servicios), así que la TUI no
+recibiría teclado; para apps interactivas el verbo de Compose es `run`. La TUI
+abre un selector para elegir tu `lista.md` y estos atajos:
 
 - `r` — resuelve los productos en ambas cadenas (muestra el progreso).
 - `c` — comparativa: total por cadena, ganador por producto y compra mixta.

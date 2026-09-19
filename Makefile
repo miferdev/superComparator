@@ -30,7 +30,7 @@ docker-build:
 	docker compose build
 
 up:
-	docker compose up
+	docker compose run --rm app
 
 clean:
 	rm -rf bin datos
