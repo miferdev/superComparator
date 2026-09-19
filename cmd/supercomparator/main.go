@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -89,6 +90,9 @@ func loadConfig(f *flags) config.Config {
 	}
 	if f.db != "" {
 		cfg.DBPath = f.db
+		if f.reportPath == "" {
+			cfg.ReportPath = filepath.Join(filepath.Dir(cfg.DBPath), "informe.md")
+		}
 	}
 	if f.reportPath != "" {
 		cfg.ReportPath = f.reportPath

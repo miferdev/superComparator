@@ -162,13 +162,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshItems()
 		return m, nil
 	case comparisonMsg:
-		if msg.err != nil {
+		if len(msg.cmp.Items) == 0 && msg.err != nil {
 			m.message = "Error al comparar: " + msg.err.Error()
 			return m, nil
 		}
 		m.cmp = msg.cmp
 		m.screen = screenCompare
 		m.refreshCompare()
+		if msg.err != nil {
+			m.message = "No se pudo escribir el informe: " + msg.err.Error()
+		}
 		return m, nil
 	case changesMsg:
 		if msg.err != nil {
@@ -311,7 +314,10 @@ func (m *Model) compare() tea.Cmd {
 	m.message = "Calculando comparativa..."
 	return func() tea.Msg {
 		cmp, err := m.core.Comparison(context.Background())
-		if err == nil && len(cmp.Items) > 0 {
+		if err != nil {
+			return comparisonMsg{cmp: cmp, err: err}
+		}
+		if len(cmp.Items) > 0 {
 			if werr := report.Write(m.cfg.ReportPath, cmp); werr != nil {
 				err = werr
 			}

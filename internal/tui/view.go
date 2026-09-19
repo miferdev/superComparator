@@ -75,9 +75,9 @@ func (m *Model) help() string {
 	case screenProgress:
 		return "resolviendo, espera…"
 	case screenCompare:
-		return "esc: volver · q: salir"
+		return "esc o q: volver a la lista"
 	case screenHistory:
-		return "esc: volver · q: salir"
+		return "esc o q: volver a la lista"
 	case screenReview:
 		return "1-9: elegir alternativa · esc: volver"
 	}
@@ -105,6 +105,7 @@ func (m *Model) refreshItems() {
 	for _, it := range m.items {
 		rows = append(rows, table.Row{it.Name, fmt.Sprintf("%d", it.Quantity), m.status[it.Name], m.notes[it.Name]})
 	}
+	m.table.SetRows(nil)
 	m.table.SetColumns([]table.Column{
 		{Title: "Producto", Width: clamp(m.width*35/100, 20, 60)},
 		{Title: "Cant.", Width: 6},
@@ -112,6 +113,7 @@ func (m *Model) refreshItems() {
 		{Title: "Último match", Width: clamp(m.width*40/100, 24, 80)},
 	})
 	m.table.SetRows(rows)
+	m.table.SetCursor(0)
 }
 
 func (m *Model) refreshCompare() {
@@ -132,8 +134,10 @@ func (m *Model) refreshCompare() {
 		cols = append(cols, table.Column{Title: report.ChainName(chainID), Width: clamp(m.width*24/100, 18, 50)})
 	}
 	cols = append(cols, table.Column{Title: "Más barato", Width: 12})
+	m.table.SetRows(nil)
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
+	m.table.SetCursor(0)
 }
 
 func optionCell(item core.ItemComparison, chainID string) string {
@@ -164,6 +168,7 @@ func (m *Model) refreshHistory() {
 			c.FetchedAt.Format(time.DateTime),
 		})
 	}
+	m.table.SetRows(nil)
 	m.table.SetColumns([]table.Column{
 		{Title: "Cadena", Width: 12},
 		{Title: "Producto", Width: clamp(m.width*40/100, 24, 70)},
@@ -172,6 +177,7 @@ func (m *Model) refreshHistory() {
 		{Title: "Fecha", Width: 20},
 	})
 	m.table.SetRows(rows)
+	m.table.SetCursor(0)
 }
 
 func keyOf(msg tea.Msg) (string, bool) {
