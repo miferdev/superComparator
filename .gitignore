@@ -1,0 +1,29 @@
+# Binarios / build Go
+/supercomparator
+/dist/
+*.exe
+*.test
+*.out
+
+# Datos locales (SQLite, informes)
+/datos/
+*.db
+
+# Lista personal del usuario
+/lista.md
+
+# Entorno y editores
+.env
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Herramientas de IA / agentes
+.opencode/
+.claude/
+.cursor/
+.windsurf/
+.continue/
+.aider*
+.specstory/
