@@ -121,6 +121,48 @@ func TestResolveCheckCompare(t *testing.T) {
 	}
 }
 
+func TestCheapestAcceptableOption(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	expensive := "https://tienda.mercadona.es/product/1/leche-entera"
+	cheap := "https://tienda.mercadona.es/product/2/leche-entera-hacendado-brick"
+	fake := &fakeChain{
+		entries: []chain.SitemapEntry{
+			{URL: expensive, Name: "leche entera brick 1 l"},
+			{URL: cheap, Name: "leche entera hacendado brick 1 l"},
+		},
+		products: map[string]chain.Product{
+			expensive: {
+				Chain: "mercadona", URL: expensive, SKU: "1", Name: "Leche entera",
+				Format: "Brik 1 L", Price: 5, MeasurePrice: 5, MeasureUnit: "l",
+				Available: true, FetchedAt: time.Now(),
+			},
+			cheap: {
+				Chain: "mercadona", URL: cheap, SKU: "2", Name: "Leche entera Hacendado",
+				Format: "Brik 1 L", Price: 0.96, MeasurePrice: 0.96, MeasureUnit: "l",
+				Available: true, FetchedAt: time.Now(),
+			},
+		},
+	}
+	cfg := config.Config{Workers: 1, Candidates: 3, Timeout: time.Second}
+	c := New(cfg, []chain.Chain{fake}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if err := c.Resolve(context.Background(), []list.Item{{Name: "leche entera 1l", Quantity: 1}}, nil); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	matches, err := st.Matches()
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("matches = %+v, %v", matches, err)
+	}
+	if matches[0].URL != cheap {
+		t.Fatalf("se esperaba la opción más barata (%s), se eligió %s", cheap, matches[0].URL)
+	}
+}
+
 func TestDelisted(t *testing.T) {
 	ctx := context.Background()
 	c, fake := newTestCore(t)

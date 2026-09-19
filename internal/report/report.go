@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/miferdev/superComparator/internal/core"
 )
@@ -76,6 +77,58 @@ func Write(path string, cmp core.Comparison) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(Generate(cmp)), 0o644)
+}
+
+// Console genera la comparativa en texto plano para la terminal: una columna
+// por supermercado con la opción más barata de cada producto pedido.
+func Console(cmp core.Comparison) string {
+	var b strings.Builder
+	w := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
+	fmt.Fprint(w, "Producto\tCant.")
+	for _, chainID := range cmp.Chains {
+		fmt.Fprintf(w, "\t%s", ChainName(chainID))
+	}
+	fmt.Fprintln(w, "\tMás barato")
+	for _, item := range cmp.Items {
+		fmt.Fprintf(w, "%s\t%d", item.Name, item.Quantity)
+		for _, chainID := range cmp.Chains {
+			opt, ok := optionFor(item, chainID)
+			if !ok || opt.Price <= 0 {
+				fmt.Fprint(w, "\t—")
+				continue
+			}
+			cell := opt.Product
+			if opt.MeasurePrice > 0 {
+				cell += fmt.Sprintf(" (%s · %s/%s)", money(opt.Price), money(opt.MeasurePrice), opt.MeasureUnit)
+			} else {
+				cell += fmt.Sprintf(" (%s)", money(opt.Price))
+			}
+			if item.Quantity > 1 {
+				cell += " · " + money(opt.Price*float64(item.Quantity))
+			}
+			if opt.Promo {
+				cell += " · oferta"
+			}
+			fmt.Fprintf(w, "\t%s", cell)
+		}
+		if item.Cheapest != "" {
+			fmt.Fprintf(w, "\t%s", ChainName(item.Cheapest))
+		} else {
+			fmt.Fprint(w, "\t—")
+		}
+		fmt.Fprintln(w)
+	}
+	w.Flush()
+
+	b.WriteString("\n")
+	for _, chainID := range cmp.Chains {
+		fmt.Fprintf(&b, "%-12s %8s\n", ChainName(chainID), money(cmp.Totals[chainID]))
+	}
+	fmt.Fprintf(&b, "%-12s %8s\n", "Mixta", money(cmp.MixedTotal))
+	if cmp.CheapestChain != "" {
+		fmt.Fprintf(&b, "Más barata: %s (ahorro %s)\n", ChainName(cmp.CheapestChain), money(cmp.MaxSaving))
+	}
+	return b.String()
 }
 
 func optionFor(item core.ItemComparison, chainID string) (core.ChainOption, bool) {

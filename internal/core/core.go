@@ -145,8 +145,11 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 		return errors.New("sin candidatos en el sitemap")
 	}
 
-	var best chain.Product
-	bestScore := -1.0
+	type candidate struct {
+		product chain.Product
+		score   float64
+	}
+	var candidates []candidate
 	alternatives := make([]Alternative, 0, len(ranked))
 	for i, cand := range ranked {
 		if i > 0 {
@@ -162,30 +165,57 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 		}
 		score := match.Similarity(item.Name, p.Name, p.Format)
 		alternatives = append(alternatives, Alternative{URL: p.URL, Name: p.Name, Score: score})
-		better := score > bestScore
-		if !better && bestScore >= 0 && score >= bestScore-0.05 && p.Price > 0 && p.Price < best.Price {
-			better = true
-		}
-		if better {
-			best, bestScore = p, score
-		}
+		candidates = append(candidates, candidate{product: p, score: score})
 	}
-	if bestScore < 0 {
+	if len(candidates) == 0 {
 		return errors.New("ningún candidato disponible")
 	}
+
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.score > best.score {
+			best = c
+		}
+	}
+	// Si hay opciones que encajan bien, se muestra la más barata de ellas
+	// (comparando por €/kg o €/L cuando ambas tienen medida).
+	if best.score >= match.AutoThreshold {
+		cheapest := best
+		for _, c := range candidates {
+			if c.score < match.AutoThreshold {
+				continue
+			}
+			if cheaperProduct(c.product, cheapest.product) {
+				cheapest = c
+			}
+		}
+		best = cheapest
+	}
+
 	sort.Slice(alternatives, func(i, j int) bool { return alternatives[i].Score > alternatives[j].Score })
 
-	if err := c.store.SetMatch(itemID, chainID, best, bestScore); err != nil {
+	if err := c.store.SetMatch(itemID, chainID, best.product, best.score); err != nil {
 		return fmt.Errorf("guardando match: %w", err)
 	}
-	if err := c.store.InsertPrice(chainID, best); err != nil {
+	if err := c.store.InsertPrice(chainID, best.product); err != nil {
 		return fmt.Errorf("guardando precio: %w", err)
 	}
-	c.emit(emit, ChainResolved{Item: item.Name, Chain: chainID, Product: best, Score: bestScore, Alternatives: alternatives})
-	if bestScore < match.AutoThreshold {
+	c.emit(emit, ChainResolved{Item: item.Name, Chain: chainID, Product: best.product, Score: best.score, Alternatives: alternatives})
+	if best.score < match.AutoThreshold {
 		c.emit(emit, ItemNeedsReview{Item: item.Name})
 	}
 	return nil
+}
+
+// cheaperProduct compara dos productos comparables: primero por precio por
+// medida (€/kg o €/L) y, si no se puede, por precio total.
+func cheaperProduct(a, b chain.Product) bool {
+	if a.MeasurePrice > 0 && b.MeasurePrice > 0 && a.MeasureUnit == b.MeasureUnit && a.MeasureUnit != "ud" {
+		if a.MeasurePrice != b.MeasurePrice {
+			return a.MeasurePrice < b.MeasurePrice
+		}
+	}
+	return a.Price < b.Price
 }
 
 func (c *Core) itemNeedsReview(name string) bool {

@@ -19,6 +19,7 @@ import (
 	"github.com/miferdev/superComparator/internal/config"
 	"github.com/miferdev/superComparator/internal/core"
 	"github.com/miferdev/superComparator/internal/list"
+	"github.com/miferdev/superComparator/internal/match"
 	"github.com/miferdev/superComparator/internal/report"
 	"github.com/miferdev/superComparator/internal/store"
 	"github.com/miferdev/superComparator/internal/tui"
@@ -157,8 +158,8 @@ func checkCmd(f *flags) *cobra.Command {
 
 			ctx := context.Background()
 			matches, _ := c.Store().Matches()
-			if len(matches) < len(items)*len(c.Chains()) {
-				fmt.Println("Resolviendo productos nuevos…")
+			if needsResolve(matches, len(items), len(c.Chains())) {
+				fmt.Println("Resolviendo productos…")
 				if err := c.Resolve(ctx, items, printEvent); err != nil {
 					return err
 				}
@@ -175,10 +176,7 @@ func checkCmd(f *flags) *cobra.Command {
 				return err
 			}
 			fmt.Println()
-			for _, chainID := range cmp.Chains {
-				fmt.Printf("%-10s %8.2f €\n", report.ChainName(chainID), cmp.Totals[chainID])
-			}
-			fmt.Printf("%-10s %8.2f €\n", "Mixta", cmp.MixedTotal)
+			fmt.Print(report.Console(cmp))
 			fmt.Printf("Informe: %s\n", cfg.ReportPath)
 			return nil
 		},
@@ -203,7 +201,8 @@ func reportCmd(f *flags) *cobra.Command {
 			if err := report.Write(cfg.ReportPath, cmp); err != nil {
 				return err
 			}
-			fmt.Println("Informe:", cfg.ReportPath)
+			fmt.Print(report.Console(cmp))
+			fmt.Println("\nInforme:", cfg.ReportPath)
 			return nil
 		},
 	}
@@ -248,6 +247,18 @@ func versionCmd() *cobra.Command {
 		Short: "Muestra la versión",
 		Run:   func(_ *cobra.Command, _ []string) { fmt.Println("supercomparator", version) },
 	}
+}
+
+func needsResolve(matches []store.Match, items, chains int) bool {
+	if len(matches) < items*chains {
+		return true
+	}
+	for _, m := range matches {
+		if m.Score < match.AutoThreshold {
+			return true
+		}
+	}
+	return false
 }
 
 func printEvent(e core.Event) {

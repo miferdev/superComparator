@@ -30,4 +30,11 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("el informe no contiene %q:\n%s", want, out)
 		}
 	}
+
+	console := Console(cmp)
+	for _, want := range []string{"Producto", "Cant.", "Mercadona", "Ahorramas", "Más barato", "2,30", "6,90 €", "Mixta"} {
+		if !strings.Contains(console, want) {
+			t.Errorf("la salida de consola no contiene %q:\n%s", want, console)
+		}
+	}
 }
