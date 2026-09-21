@@ -57,12 +57,26 @@ func (m *Model) view() string {
 			b.WriteString(m.table.View())
 		}
 	case screenReview:
-		b.WriteString(dimStyle.Render(fmt.Sprintf("Alternativas para %q:", m.review)) + "\n\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("Alternativas para %q:", m.review)) + "\n")
+		b.WriteString(dimStyle.Render("Precio unidad · precio por kg/l") + "\n\n")
+		cheapest, criterion := core.CheapestIndex(m.reviewOptions())
 		for i, opt := range m.options {
+			cursor := "  "
+			if i == m.reviewCursor {
+				cursor = accentStyle.Render("▶ ")
+			}
 			num := helpKeyStyle.Render(fmt.Sprintf("%d", i+1))
 			chain := accentStyle.Render(report.ChainName(opt.ChainID))
-			score := dimStyle.Render(fmt.Sprintf("%.2f", opt.Score))
-			fmt.Fprintf(&b, "  %s  %s  %s  %s\n", num, chain, opt.Name, score)
+			price := money(opt.Price)
+			if opt.MeasurePrice > 0 {
+				price += fmt.Sprintf(" · %s/%s", money(opt.MeasurePrice), opt.MeasureUnit)
+			}
+			mark := ""
+			if i == cheapest {
+				mark = "  " + okStyle.Render("← más barato ("+criterion+")")
+			}
+			fmt.Fprintf(&b, "%s%s  %s  %s\n", cursor, num, chain, opt.Name)
+			fmt.Fprintf(&b, "      %s  ·  confianza %.2f%s\n", price, opt.Score, mark)
 		}
 	}
 
@@ -115,7 +129,12 @@ func (m *Model) helpView() string {
 	case screenHistory:
 		return helpLine(helpBinding{"↑/↓", "moverse"}, helpBinding{"esc", "volver"}, helpBinding{"q", "volver"}, helpBinding{"ctrl+c", "salir"})
 	case screenReview:
-		return helpLine(helpBinding{"1-9", "elegir"}, helpBinding{"esc", "volver"})
+		return helpLine(
+			helpBinding{"↑/↓", "moverse"},
+			helpBinding{"enter", "elegir"},
+			helpBinding{"1-9", "elegir"},
+			helpBinding{"esc", "volver"},
+		)
 	}
 	return ""
 }

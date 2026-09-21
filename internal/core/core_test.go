@@ -151,7 +151,8 @@ func TestCheapestAcceptableOption(t *testing.T) {
 	cfg := config.Config{Workers: 1, Candidates: 3, Timeout: time.Second}
 	c := New(cfg, []chain.Chain{fake}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	if err := c.Resolve(context.Background(), []list.Item{{Name: "leche entera 1l", Quantity: 1}}, nil); err != nil {
+	col := &collector{}
+	if err := c.Resolve(context.Background(), []list.Item{{Name: "leche entera 1l", Quantity: 1}}, col.add); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	matches, err := st.Matches()
@@ -160,6 +161,20 @@ func TestCheapestAcceptableOption(t *testing.T) {
 	}
 	if matches[0].URL != cheap {
 		t.Fatalf("se esperaba la opción más barata (%s), se eligió %s", cheap, matches[0].URL)
+	}
+	if !col.has(func(e Event) bool {
+		cr, ok := e.(ChainResolved)
+		if !ok || len(cr.Alternatives) == 0 {
+			return false
+		}
+		for _, a := range cr.Alternatives {
+			if a.Price <= 0 || a.MeasurePrice <= 0 || a.MeasureUnit != "l" {
+				return false
+			}
+		}
+		return true
+	}) {
+		t.Fatalf("las alternativas deben llevar precio y €/medida: %+v", col.events)
 	}
 }
 

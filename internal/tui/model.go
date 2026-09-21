@@ -53,10 +53,13 @@ type (
 )
 
 type reviewOption struct {
-	ChainID string
-	URL     string
-	Name    string
-	Score   float64
+	ChainID      string
+	URL          string
+	Name         string
+	Score        float64
+	Price        float64
+	MeasurePrice float64
+	MeasureUnit  string
 }
 
 type Model struct {
@@ -72,14 +75,24 @@ type Model struct {
 	spinner spinner.Model
 	table   table.Model
 
-	items   []list.Item
-	status  map[string]string
-	notes   map[string]string
-	alts    map[string]map[string][]core.Alternative
-	review  string
-	options []reviewOption
+	items        []list.Item
+	status       map[string]string
+	notes        map[string]string
+	alts         map[string]map[string][]core.Alternative
+	review       string
+	options      []reviewOption
+	reviewCursor int
 
-	cmp      core.Comparison
+	// scores y failed acumulan el resultado por cadena para derivar el estado
+	// del producto sin depender del orden de los eventos.
+	scores map[string]map[string]float64
+	failed map[string]map[string]bool
+	phase  string
+
+	cmp        core.Comparison
+	lineTotals map[string]float64
+	grandTotal float64
+
 	changes  []store.Change
 	events   chan tea.Msg
 	logLines []string
@@ -101,7 +114,11 @@ func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
 		status:  map[string]string{},
 		notes:   map[string]string{},
 		alts:    map[string]map[string][]core.Alternative{},
-		events:  make(chan tea.Msg, 256),
+		scores:  map[string]map[string]float64{},
+		failed:  map[string]map[string]bool{},
+
+		lineTotals: map[string]float64{},
+		events:     make(chan tea.Msg, 256),
 	}
 	if cfg.ListaPath != "" {
 		if err := m.loadList(cfg.ListaPath); err != nil {
@@ -221,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.buildReview(m.items[m.table.Cursor()].Name)) > 0 {
 					m.review = m.items[m.table.Cursor()].Name
 					m.options = m.buildReview(m.review)
+					m.reviewCursor = 0
 					m.screen = screenReview
 					return m, nil
 				}
@@ -235,15 +253,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case screenReview:
 		if key, ok := keyOf(msg); ok {
-			if key == "esc" || key == "q" {
+			switch {
+			case key == "esc" || key == "q":
 				m.screen = screenList
 				return m, nil
-			}
-			if idx := keyNumber(key); idx >= 0 && idx < len(m.options) {
-				opt := m.options[idx]
-				return m, func() tea.Msg {
-					p, err := m.core.ChooseAlternative(context.Background(), m.review, opt.ChainID, opt.URL)
-					return alternativeMsg{item: m.review, chainID: opt.ChainID, product: p, err: err}
+			case key == "up" || key == "k":
+				if m.reviewCursor > 0 {
+					m.reviewCursor--
+				}
+			case key == "down" || key == "j":
+				if m.reviewCursor < len(m.options)-1 {
+					m.reviewCursor++
+				}
+			case key == "enter":
+				if m.reviewCursor >= 0 && m.reviewCursor < len(m.options) {
+					return m, m.chooseReview(m.reviewCursor)
+				}
+			default:
+				if idx := keyNumber(key); idx >= 0 && idx < len(m.options) {
+					m.reviewCursor = idx
+					return m, m.chooseReview(idx)
 				}
 			}
 		}
@@ -362,7 +391,30 @@ func (m *Model) buildReview(item string) []reviewOption {
 	var opts []reviewOption
 	for _, chainID := range m.core.Chains() {
 		for _, alt := range m.alts[item][chainID] {
-			opts = append(opts, reviewOption{ChainID: chainID, URL: alt.URL, Name: alt.Name, Score: alt.Score})
+			opts = append(opts, reviewOption{
+				ChainID: chainID, URL: alt.URL, Name: alt.Name, Score: alt.Score,
+				Price: alt.Price, MeasurePrice: alt.MeasurePrice, MeasureUnit: alt.MeasureUnit,
+			})
+		}
+	}
+	return opts
+}
+
+func (m *Model) chooseReview(idx int) tea.Cmd {
+	opt := m.options[idx]
+	return func() tea.Msg {
+		p, err := m.core.ChooseAlternative(context.Background(), m.review, opt.ChainID, opt.URL)
+		return alternativeMsg{item: m.review, chainID: opt.ChainID, product: p, err: err}
+	}
+}
+
+// reviewOptions adapta las alternativas a la regla de comparación del núcleo.
+func (m *Model) reviewOptions() []core.ChainOption {
+	opts := make([]core.ChainOption, len(m.options))
+	for i, o := range m.options {
+		opts[i] = core.ChainOption{
+			Chain: o.ChainID, Product: o.Name, URL: o.URL, Price: o.Price,
+			MeasurePrice: o.MeasurePrice, MeasureUnit: o.MeasureUnit, Available: true,
 		}
 	}
 	return opts

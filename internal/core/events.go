@@ -57,9 +57,12 @@ type RunFinished struct {
 }
 
 type Alternative struct {
-	URL   string
-	Name  string
-	Score float64
+	URL          string
+	Name         string
+	Score        float64
+	Price        float64
+	MeasurePrice float64
+	MeasureUnit  string
 }
 
 func (RunStarted) event()      {}

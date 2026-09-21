@@ -173,7 +173,10 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 			continue
 		}
 		score := match.Similarity(item.Name, p.Name, p.Format)
-		alternatives = append(alternatives, Alternative{URL: p.URL, Name: p.Name, Score: score})
+		alternatives = append(alternatives, Alternative{
+			URL: p.URL, Name: p.Name, Score: score,
+			Price: p.Price, MeasurePrice: p.MeasurePrice, MeasureUnit: p.MeasureUnit,
+		})
 		candidates = append(candidates, candidate{product: p, score: score})
 	}
 	if len(candidates) == 0 {
