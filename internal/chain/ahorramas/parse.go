@@ -15,7 +15,6 @@ import (
 var errNoProduct = errors.New("ficha sin datos de producto")
 
 var (
-	measureRe = regexp.MustCompile(`(?i)([0-9]+,[0-9]+)&euro;/(KILO|KG|LITRO|L|ML)\b`)
 	netWeight = regexp.MustCompile(`(?i)(?:Peso Neto escurrido|Contenido neto)\s*:\s*([0-9.,]+\s*[A-Za-z]+)`)
 	promoRe   = regexp.MustCompile(`Bajada de precio a [^()]{0,60}\([^)]*\)`)
 )
@@ -67,11 +66,9 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		return chain.Product{}, errNoProduct
 	}
 
-	if m := measureRe.FindStringSubmatch(html); m != nil {
-		if f, ok := chain.ParsePrice(m[1]); ok {
-			p.MeasurePrice = f
-		}
-		p.MeasureUnit = canonicalUnit(m[2])
+	if m, ok := chain.ParseMeasurePrice(html); ok {
+		p.MeasurePrice = m.Value
+		p.MeasureUnit = m.Unit
 	}
 	p.UnitPrice = p.Price
 
@@ -87,19 +84,6 @@ func ParseProduct(html, url string) (chain.Product, error) {
 
 	p.Format = format(doc, p.Name)
 	return p, nil
-}
-
-func canonicalUnit(raw string) string {
-	switch strings.ToUpper(raw) {
-	case "KG", "KILO":
-		return "kg"
-	case "L", "LITRO":
-		return "l"
-	case "ML":
-		return "ml"
-	default:
-		return strings.ToLower(raw)
-	}
 }
 
 func format(doc *goquery.Document, name string) string {

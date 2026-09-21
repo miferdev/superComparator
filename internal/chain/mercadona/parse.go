@@ -13,10 +13,7 @@ import (
 
 var errNoProduct = errors.New("ficha sin datos de producto")
 
-var (
-	measureRe = regexp.MustCompile(`(?i)([0-9]+,[0-9]+)\s*€/(kg|l)\b`)
-	productRe = regexp.MustCompile(`/product/(\d+)/`)
-)
+var productRe = regexp.MustCompile(`/product/(\d+)/`)
 
 // ParseProduct extrae el producto del DOM renderizado de una ficha de Mercadona.
 func ParseProduct(html, url string) (chain.Product, error) {
@@ -51,11 +48,9 @@ func ParseProduct(html, url string) (chain.Product, error) {
 	formatText := strings.TrimSpace(strings.Join(spans, ""))
 	if before, after, ok := strings.Cut(formatText, "|"); ok {
 		p.Format = strings.TrimSpace(before)
-		if m := measureRe.FindStringSubmatch(after); m != nil {
-			if f, ok := chain.ParsePrice(m[1]); ok {
-				p.MeasurePrice = f
-			}
-			p.MeasureUnit = strings.ToLower(m[2])
+		if m, ok := chain.ParseMeasurePrice(after); ok {
+			p.MeasurePrice = m.Value
+			p.MeasureUnit = m.Unit
 		}
 	} else {
 		p.Format = chain.FormatFromName(p.Name)
@@ -68,17 +63,8 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		p.Available = true
 	}
 	extra := strings.ToLower(detail.Find("p.product-price__extra-price").First().Text())
-	if p.MeasureUnit == "" {
-		switch {
-		case strings.Contains(extra, "/kg"):
-			p.MeasureUnit = "kg"
-			p.MeasurePrice = p.Price
-		case strings.Contains(extra, "/l"):
-			p.MeasureUnit = "l"
-			p.MeasurePrice = p.Price
-		case strings.Contains(extra, "/ud"):
-			p.MeasureUnit = "ud"
-		}
+	if p.MeasureUnit == "" && strings.Contains(extra, "/ud") {
+		p.MeasureUnit = "ud"
 	}
 
 	if old := detail.Find("[class*='previous'], s, del").First().Text(); old != "" {

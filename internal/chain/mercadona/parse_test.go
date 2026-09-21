@@ -33,3 +33,19 @@ func TestParseProduct(t *testing.T) {
 		t.Error("Available = false")
 	}
 }
+
+func TestParseProductSinMedidaNoInventaPrecio(t *testing.T) {
+	const html = `<div class="private-product-detail">
+		<h1 class="private-product-detail__description">Arroz redondo</h1>
+		<div class="product-format__size"><span aria-hidden="true">Paquete 1 kg</span></div>
+		<p class="product-price__unit-price">1,25 €</p>
+		<p class="product-price__extra-price">/kg</p>
+	</div>`
+	p, err := ParseProduct(html, "https://tienda.mercadona.es/product/12345/arroz-redondo")
+	if err != nil {
+		t.Fatalf("ParseProduct: %v", err)
+	}
+	if p.MeasurePrice != 0 || p.MeasureUnit != "" {
+		t.Errorf("no debe inferir €/medida: %v %q", p.MeasurePrice, p.MeasureUnit)
+	}
+}
