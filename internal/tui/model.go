@@ -100,6 +100,9 @@ type Model struct {
 	message  string
 }
 
+// reviewThreshold es la similitud mínima para considerar un match fiable.
+const reviewThreshold = 0.5
+
 func New(cfg config.Config, c *core.Core, log *slog.Logger) Model {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 
@@ -320,6 +323,8 @@ func (m *Model) loadList(path string) error {
 func (m *Model) startResolve() tea.Cmd {
 	m.running = true
 	m.logLines = nil
+	m.scores = map[string]map[string]float64{}
+	m.failed = map[string]map[string]bool{}
 	m.screen = screenProgress
 	go func() {
 		err := m.core.Resolve(context.Background(), m.items, func(e core.Event) {
@@ -355,14 +360,16 @@ func (m *Model) history() tea.Cmd {
 
 func (m *Model) handleEvent(ev core.Event) {
 	switch e := ev.(type) {
+	case core.RunStarted:
+		m.phase = e.Phase
 	case core.ItemStarted:
 		m.pushLine(fmt.Sprintf("[%d/%d] %s", e.Index, e.Total, e.Item))
 	case core.ChainResolved:
-		if e.Score < 0.5 {
-			m.status[e.Item] = "revisar"
-		} else {
-			m.status[e.Item] = "resuelto"
+		if m.scores[e.Item] == nil {
+			m.scores[e.Item] = map[string]float64{}
 		}
+		m.scores[e.Item][e.Chain] = e.Score
+		m.refreshStatus(e.Item)
 		m.notes[e.Item] = fmt.Sprintf("%s: %s %s", report.ChainName(e.Chain), e.Product.Name, money(e.Product.Price))
 		if m.alts[e.Item] == nil {
 			m.alts[e.Item] = map[string][]core.Alternative{}
@@ -370,9 +377,17 @@ func (m *Model) handleEvent(ev core.Event) {
 		m.alts[e.Item][e.Chain] = e.Alternatives
 		m.pushLine(fmt.Sprintf("  %s → %s (%s)", report.ChainName(e.Chain), e.Product.Name, money(e.Product.Price)))
 	case core.ItemNeedsReview:
-		m.status[e.Item] = "revisar"
+		m.refreshStatus(e.Item)
 	case core.ItemFailed:
-		m.status[e.Item] = "error"
+		if m.phase == "resolver" {
+			if m.failed[e.Item] == nil {
+				m.failed[e.Item] = map[string]bool{}
+			}
+			m.failed[e.Item][e.Chain] = true
+			m.refreshStatus(e.Item)
+		} else {
+			m.status[e.Item] = "error"
+		}
 		m.notes[e.Item] = e.Chain + ": " + e.Err
 		m.pushLine(fmt.Sprintf("  %s: %s", report.ChainName(e.Chain), e.Err))
 	case core.PriceChanged:
@@ -384,6 +399,34 @@ func (m *Model) handleEvent(ev core.Event) {
 		m.notes[e.Item] = report.ChainName(e.Chain) + ": descatalogado"
 	case core.RunFinished:
 		m.pushLine(fmt.Sprintf("Fin: %d ok, %d revisar, %d fallos", e.Resolved, e.Review, e.Failed))
+	}
+}
+
+// refreshStatus deriva el estado del producto a partir de las puntuaciones de
+// todas las cadenas, para que un match flojo no quede oculto por el orden de
+// llegada de los eventos.
+func (m *Model) refreshStatus(item string) {
+	scores := m.scores[item]
+	if len(scores) > 0 {
+		for _, score := range scores {
+			if score < reviewThreshold {
+				m.status[item] = "revisar"
+				return
+			}
+		}
+		if len(m.failed[item]) > 0 {
+			m.status[item] = "revisar"
+			return
+		}
+		m.status[item] = "resuelto"
+		return
+	}
+	if len(m.failed[item]) > 0 {
+		m.status[item] = "error"
+		return
+	}
+	if _, ok := m.status[item]; !ok {
+		m.status[item] = "pendiente"
 	}
 }
 
