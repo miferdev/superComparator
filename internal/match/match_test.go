@@ -75,6 +75,7 @@ func TestParseMeasure(t *testing.T) {
 		{"6 mini briks x 200 ml", 1.2, "l"},
 		{"Paquete 400 g", 0.4, "kg"},
 		{"2 x 500 g", 1, "kg"},
+		{"20 cl", 0.2, "l"},
 	}
 	for _, c := range cases {
 		m, ok := ParseMeasure(c.in)
@@ -84,5 +85,22 @@ func TestParseMeasure(t *testing.T) {
 	}
 	if _, ok := ParseMeasure("sin medida"); ok {
 		t.Error("no debería encontrar medida")
+	}
+}
+
+func TestSimilarityToleraMarca(t *testing.T) {
+	got := Similarity("leche entera 1 l", "Leche entera Hacendado Brick 1 L", "Brik 1 L")
+	if got < 0.8 {
+		t.Fatalf("la marca extra no debe hundir la coincidencia: %v", got)
+	}
+}
+
+func TestSinonimos(t *testing.T) {
+	if got := Tokens("refresco de cola"); len(got) != 2 || got[0] != "bebida" || got[1] != "cola" {
+		t.Fatalf("Tokens = %v", got)
+	}
+	got := Rank("refresco cola", entries("bebida cola zero"), 3)
+	if len(got) != 1 {
+		t.Fatalf("no se unificó el sinónimo: %+v", got)
 	}
 }

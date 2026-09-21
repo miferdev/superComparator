@@ -18,6 +18,10 @@ import (
 // AutoThreshold es la similitud mínima para aceptar un producto sin revisión.
 const AutoThreshold = 0.5
 
+// CoverageThreshold es la fracción mínima (ponderada) de la consulta que debe
+// aparecer en el nombre del candidato para entrar en el ranking.
+const CoverageThreshold = 0.6
+
 var (
 	sizeRe    = regexp.MustCompile(`(?i)(\d+(?:[.,]\d+)?)\s*(kg|kilos?|g|gramos?|l|litros?|ml|cl|uds?|unidades?)\b`)
 	packRe    = regexp.MustCompile(`(?i)(\d+)\s+(?:[\p{L}]+\s+)*[x×]\s*(\d+(?:[.,]\d+)?)\s*(ml|cl|l|kg|g)\b`)
@@ -30,6 +34,12 @@ var (
 		"por": true, "al": true, "a": true,
 	}
 	packWords = map[string]bool{"pack": true, "lote": true, "estuche": true, "multipack": true}
+	// synonyms unifica términos equivalentes que cada cadena escribe distinto.
+	synonyms = map[string]string{
+		"refresco": "bebida",
+		"gaseosa":  "bebida",
+		"soda":     "bebida",
+	}
 	sizeUnits = map[string]string{
 		"kg": "kg", "kilo": "kg", "kilos": "kg",
 		"g": "g", "gramo": "g", "gramos": "g",
@@ -40,10 +50,7 @@ var (
 )
 
 // Measure es una cantidad normalizada a l (volumen) o kg (peso).
-type Measure struct {
-	Value float64
-	Unit  string
-}
+type Measure = chain.Measure
 
 type Scored struct {
 	Entry chain.SitemapEntry
@@ -74,14 +81,19 @@ func Normalize(s string) string {
 	return strings.TrimSpace(spaceRe.ReplaceAllString(s, " "))
 }
 
-// Tokens normaliza, elimina stopwords y aplica stemming ligero de plurales.
+// Tokens normaliza, elimina stopwords, aplica stemming ligero de plurales y
+// unifica sinónimos.
 func Tokens(s string) []string {
 	var out []string
 	for _, t := range strings.Fields(Normalize(s)) {
 		if stopwords[t] {
 			continue
 		}
-		out = append(out, stem(t))
+		t = stem(t)
+		if canonical, ok := synonyms[t]; ok {
+			t = canonical
+		}
+		out = append(out, t)
 	}
 	return out
 }
@@ -96,6 +108,30 @@ func stem(t string) string {
 	return t
 }
 
+// tokenWeight da más peso a los términos largos, que suelen ser más
+// específicos ("desnatada" frente a "sin").
+func tokenWeight(t string) float64 {
+	return 1 + 0.1*float64(len([]rune(t)))
+}
+
+// coverage mide qué parte del peso de la consulta aparece en el candidato.
+// A diferencia de Jaccard, no penaliza tokens extra del candidato, de modo que
+// la marca o el adjetivo de una cadena no hunden una coincidencia buena.
+func coverage(query []string, candidate map[string]bool) float64 {
+	total, matched := 0.0, 0.0
+	for _, q := range query {
+		w := tokenWeight(q)
+		total += w
+		if candidate[q] {
+			matched += w
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return matched / total
+}
+
 // ParseMeasure extrae una cantidad normalizada de un texto. Entiende packs
 // tipo "6 briks x 1 L" (total 6 l) y medidas simples ("400 g").
 func ParseMeasure(s string) (Measure, bool) {
@@ -103,7 +139,7 @@ func ParseMeasure(s string) (Measure, bool) {
 		count, err1 := strconv.ParseFloat(m[1], 64)
 		size, err2 := strconv.ParseFloat(strings.ReplaceAll(m[2], ",", "."), 64)
 		if err1 == nil && err2 == nil {
-			if measure, ok := normalizeMeasure(count*size, m[3]); ok {
+			if measure, ok := chain.NormalizeMeasure(count*size, m[3]); ok {
 				return measure, true
 			}
 		}
@@ -111,26 +147,10 @@ func ParseMeasure(s string) (Measure, bool) {
 	if m := sizeRe.FindStringSubmatch(s); m != nil {
 		size, err := strconv.ParseFloat(strings.ReplaceAll(m[1], ",", "."), 64)
 		if err == nil {
-			if measure, ok := normalizeMeasure(size, m[2]); ok {
+			if measure, ok := chain.NormalizeMeasure(size, m[2]); ok {
 				return measure, true
 			}
 		}
-	}
-	return Measure{}, false
-}
-
-func normalizeMeasure(value float64, unit string) (Measure, bool) {
-	switch strings.ToLower(unit) {
-	case "ml":
-		return Measure{value / 1000, "l"}, true
-	case "cl":
-		return Measure{value / 10, "l"}, true
-	case "l", "litro", "litros":
-		return Measure{value, "l"}, true
-	case "g", "gramo", "gramos":
-		return Measure{value / 1000, "kg"}, true
-	case "kg", "kilo", "kilos":
-		return Measure{value, "kg"}, true
 	}
 	return Measure{}, false
 }
@@ -180,17 +200,11 @@ func Rank(query string, entries []chain.SitemapEntry, limit int) []Scored {
 		for _, t := range et {
 			set[t] = true
 		}
-		matched := 0
-		for _, q := range qt {
-			if set[q] {
-				matched++
-			}
-		}
-		coverage := float64(matched) / float64(len(qt))
-		if coverage < 0.6 {
+		cov := coverage(qt, set)
+		if cov < CoverageThreshold {
 			continue
 		}
-		score := coverage*2 - 0.02*float64(len(et))
+		score := cov*2 - 0.02*float64(len(et))
 		if strings.Contains(Normalize(e.Name), phrase) {
 			score += 0.5
 		}
@@ -228,17 +242,7 @@ func Similarity(query, name, format string) float64 {
 	for _, t := range bt {
 		set[t] = true
 	}
-	inter := 0
-	for _, t := range at {
-		if set[t] {
-			inter++
-		}
-	}
-	union := len(at) + len(bt) - inter
-	if union == 0 {
-		return 0
-	}
-	score := float64(inter) / float64(union)
+	score := coverage(at, set)
 
 	qm, qok := ParseMeasure(query)
 	pm, pok := ParseMeasure(format)

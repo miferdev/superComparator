@@ -140,7 +140,8 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 	if err != nil {
 		return fmt.Errorf("sitemap: %w", err)
 	}
-	ranked := match.Rank(item.Name, entries, c.cfg.Candidates)
+	pool, maxCandidates := c.candidateLimits()
+	ranked := match.Rank(item.Name, entries, pool)
 	if len(ranked) == 0 {
 		return errors.New("sin candidatos en el sitemap")
 	}
@@ -151,10 +152,18 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 	}
 	var candidates []candidate
 	alternatives := make([]Alternative, 0, len(ranked))
-	for i, cand := range ranked {
-		if i > 0 {
+	fetched := 0
+	for _, cand := range ranked {
+		if len(candidates) >= maxCandidates || fetched >= pool {
+			break
+		}
+		if cand.Score < c.cfg.MinScore {
+			continue
+		}
+		if fetched > 0 {
 			time.Sleep(c.cfg.Delay)
 		}
+		fetched++
 		p, err := ch.Fetch(ctx, cand.Entry.URL)
 		if err != nil {
 			c.log.Debug("candidato descartado", "url", cand.Entry.URL, "err", err)
