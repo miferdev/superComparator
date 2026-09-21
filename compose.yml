@@ -12,6 +12,7 @@ services:
       SUPERCOMPARATOR_LISTA_DIR: /compras
       SUPERCOMPARATOR_DB: /datos/precios.db
       SUPERCOMPARATOR_REPORT: /datos/informe.md
+      SUPERCOMPARATOR_LOG: ${SUPERCOMPARATOR_LOG:-}
     volumes:
       - .:/compras:ro
       - ./datos:/datos

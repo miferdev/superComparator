@@ -212,6 +212,23 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 	if err := c.store.InsertPrice(chainID, best.product); err != nil {
 		return fmt.Errorf("guardando precio: %w", err)
 	}
+	c.log.Info("match resuelto",
+		"item", item.Name,
+		"chain", chainID,
+		"product", best.product.Name,
+		"score", best.score,
+		"price", best.product.Price,
+		"measure_price", best.product.MeasurePrice,
+		"measure_unit", best.product.MeasureUnit,
+	)
+	if best.score < match.AutoThreshold {
+		c.log.Warn("match con confianza baja",
+			"item", item.Name,
+			"chain", chainID,
+			"product", best.product.Name,
+			"score", best.score,
+		)
+	}
 	c.emit(emit, ChainResolved{Item: item.Name, Chain: chainID, Product: best.product, Score: best.score, Alternatives: alternatives})
 	if best.score < match.AutoThreshold {
 		c.emit(emit, ItemNeedsReview{Item: item.Name})
