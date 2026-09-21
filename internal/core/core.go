@@ -178,18 +178,18 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 		}
 	}
 	// Si hay opciones que encajan bien, se muestra la más barata de ellas
-	// (comparando por €/kg o €/L cuando ambas tienen medida).
-	if best.score >= match.AutoThreshold {
-		cheapest := best
-		for _, c := range candidates {
-			if c.score < match.AutoThreshold {
-				continue
-			}
-			if cheaperProduct(c.product, cheapest.product) {
-				cheapest = c
-			}
+	// aplicando la misma regla que en la comparativa.
+	eligible := make([]comparable, 0, len(candidates))
+	indexes := make([]int, 0, len(candidates))
+	for i, c := range candidates {
+		if c.score < match.AutoThreshold {
+			continue
 		}
-		best = cheapest
+		eligible = append(eligible, comparableOfProduct(c.product))
+		indexes = append(indexes, i)
+	}
+	if k, _ := cheapestIndex(eligible); k >= 0 {
+		best = candidates[indexes[k]]
 	}
 
 	sort.Slice(alternatives, func(i, j int) bool { return alternatives[i].Score > alternatives[j].Score })
@@ -207,15 +207,29 @@ func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID in
 	return nil
 }
 
-// cheaperProduct compara dos productos comparables: primero por precio por
-// medida (€/kg o €/L) y, si no se puede, por precio total.
-func cheaperProduct(a, b chain.Product) bool {
-	if a.MeasurePrice > 0 && b.MeasurePrice > 0 && a.MeasureUnit == b.MeasureUnit && a.MeasureUnit != "ud" {
-		if a.MeasurePrice != b.MeasurePrice {
-			return a.MeasurePrice < b.MeasurePrice
-		}
+// priceIsStale indica si el precio superó la antigüedad máxima configurada.
+func (c *Core) priceIsStale(fetchedAt time.Time) bool {
+	if c.cfg.MaxPriceAge <= 0 || fetchedAt.IsZero() {
+		return false
 	}
-	return a.Price < b.Price
+	return time.Since(fetchedAt) > c.cfg.MaxPriceAge
+}
+
+// candidateLimits resuelve los topes de ranking y descarga, aplicando valores
+// por defecto si la configuración llega a cero (tests o uso embebido).
+func (c *Core) candidateLimits() (pool, maxCandidates int) {
+	pool = c.cfg.RankPool
+	if pool <= 0 {
+		pool = c.cfg.Candidates
+	}
+	if pool <= 0 {
+		pool = 3
+	}
+	maxCandidates = c.cfg.Candidates
+	if maxCandidates <= 0 || maxCandidates > pool {
+		maxCandidates = pool
+	}
+	return pool, maxCandidates
 }
 
 func (c *Core) itemNeedsReview(name string) bool {
@@ -295,14 +309,18 @@ type ChainOption struct {
 	OldPrice     float64
 	Promo        bool
 	Available    bool
+	FetchedAt    time.Time
+	Stale        bool
 }
 
 type ItemComparison struct {
-	Name     string
-	Quantity int
-	Options  []ChainOption
-	Cheapest string
-	Save     float64
+	Name          string
+	Quantity      int
+	Options       []ChainOption
+	Cheapest      string
+	CheapestPrice float64
+	Criterion     string
+	Save          float64
 }
 
 type Comparison struct {
@@ -346,6 +364,8 @@ func (c *Core) Comparison(_ context.Context) (Comparison, error) {
 			OldPrice:     row.OldPrice,
 			Promo:        row.OldPrice > row.Price && row.Price > 0,
 			Available:    row.Available,
+			FetchedAt:    row.FetchedAt,
+			Stale:        c.priceIsStale(row.FetchedAt),
 		})
 	}
 	for i := range cmp.Items {
@@ -355,15 +375,18 @@ func (c *Core) Comparison(_ context.Context) (Comparison, error) {
 				cmp.Totals[opt.Chain] += opt.Price * float64(ic.Quantity)
 			}
 		}
-		sort.Slice(ic.Options, func(a, b int) bool {
-			return effectiveUnitPrice(ic.Options[a]) < effectiveUnitPrice(ic.Options[b])
-		})
-		if len(ic.Options) > 0 && ic.Options[0].Price > 0 {
-			ic.Cheapest = ic.Options[0].Chain
-			if len(ic.Options) > 1 {
-				ic.Save = (ic.Options[1].Price - ic.Options[0].Price) * float64(ic.Quantity)
+		comps := make([]comparable, len(ic.Options))
+		for j, opt := range ic.Options {
+			comps[j] = comparableOfOption(opt)
+		}
+		if k, criterion := cheapestIndex(comps); k >= 0 {
+			ic.Criterion = criterion
+			ic.Cheapest = ic.Options[k].Chain
+			ic.CheapestPrice = ic.Options[k].Price
+			cmp.MixedTotal += ic.Options[k].Price * float64(ic.Quantity)
+			if next, ok := runnerUpPrice(comps, k); ok {
+				ic.Save = (next - ic.Options[k].Price) * float64(ic.Quantity)
 			}
-			cmp.MixedTotal += ic.Options[0].Price * float64(ic.Quantity)
 		}
 	}
 	best := ""
@@ -421,15 +444,4 @@ func (c *Core) ChooseAlternative(ctx context.Context, itemName, chainID, url str
 		return chain.Product{}, err
 	}
 	return p, nil
-}
-
-// effectiveUnitPrice permite comparar por €/unidad aunque los formatos difieran.
-func effectiveUnitPrice(o ChainOption) float64 {
-	if o.MeasurePrice > 0 {
-		return o.MeasurePrice
-	}
-	if o.Price > 0 {
-		return o.Price
-	}
-	return 1 << 30
 }
