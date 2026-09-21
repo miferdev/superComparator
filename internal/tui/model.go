@@ -153,7 +153,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.browser.height = clamp(msg.Height-10, 5, 30)
 		m.table.SetWidth(clamp(msg.Width-4, 40, 200))
-		m.table.SetHeight(clamp(msg.Height-8, 5, 60))
+		if m.screen == screenList {
+			m.refreshItems()
+		} else {
+			m.table.SetHeight(clamp(msg.Height-10, 5, 55))
+		}
 		return m, nil
 	case eventMsg:
 		m.handleEvent(msg.ev)
@@ -169,6 +173,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = "Fase " + msg.phase + " terminada"
 		}
+		m.refreshTotals()
 		m.refreshItems()
 		return m, nil
 	case comparisonMsg:
@@ -201,6 +206,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notes[msg.item] = fmt.Sprintf("%s: %s %s", report.ChainName(msg.chainID), msg.product.Name, money(msg.product.Price))
 		m.screen = screenList
 		m.message = "Producto cambiado a " + msg.product.Name
+		m.refreshTotals()
 		m.refreshItems()
 		return m, nil
 	case spinner.TickMsg:
@@ -316,8 +322,27 @@ func (m *Model) loadList(path string) error {
 		}
 	}
 	m.message = fmt.Sprintf("Lista cargada: %s (%d productos)", filepath.Base(path), len(items))
+	m.refreshTotals()
 	m.refreshItems()
 	return nil
+}
+
+// refreshTotals recalcula el coste de cada línea y el total de la compra con
+// la regla del núcleo (opción más barata de cada producto).
+func (m *Model) refreshTotals() {
+	cmp, err := m.core.Comparison(context.Background())
+	if err != nil {
+		return
+	}
+	m.cmp = cmp
+	totals := make(map[string]float64, len(cmp.Items))
+	for _, item := range cmp.Items {
+		if item.CheapestPrice > 0 {
+			totals[item.Name] = item.CheapestPrice * float64(item.Quantity)
+		}
+	}
+	m.lineTotals = totals
+	m.grandTotal = cmp.MixedTotal
 }
 
 func (m *Model) startResolve() tea.Cmd {

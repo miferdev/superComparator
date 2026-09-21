@@ -32,6 +32,8 @@ func (m *Model) view() string {
 			b.WriteString(dimStyle.Render("No hay productos en la lista."))
 		} else {
 			b.WriteString(m.table.View())
+			b.WriteString("\n")
+			b.WriteString(m.itemsTotalView())
 		}
 	case screenProgress:
 		fmt.Fprintf(&b, "%s %s\n\n", m.spinner.View(), accentStyle.Render("Trabajando…"))
@@ -165,23 +167,49 @@ func (m *Model) totalsView() string {
 func (m *Model) refreshItems() {
 	rows := make([]table.Row, 0, len(m.items))
 	for _, it := range m.items {
-		status := m.status[it.Name]
 		rows = append(rows, table.Row{
 			it.Name,
 			fmt.Sprintf("%d", it.Quantity),
-			statusStyle(status).Render(status),
+			statusEmoji(m.status[it.Name]),
+			lineTotalCell(m.lineTotals[it.Name]),
 			dimStyle.Render(m.notes[it.Name]),
 		})
 	}
 	m.table.SetRows(nil)
 	m.table.SetColumns([]table.Column{
-		{Title: "Producto", Width: clamp(m.width*35/100, 20, 60)},
+		{Title: "Producto", Width: clamp(m.width*30/100, 18, 50)},
 		{Title: "Cant.", Width: 6},
-		{Title: "Estado", Width: 14},
-		{Title: "Último match", Width: clamp(m.width*40/100, 24, 80)},
+		{Title: "OK", Width: 4},
+		{Title: "Total", Width: 12},
+		{Title: "Último match", Width: clamp(m.width*32/100, 20, 70)},
 	})
+	m.table.SetHeight(clamp(len(rows)+2, 3, clamp(m.height-16, 5, 50)))
 	m.table.SetRows(rows)
 	m.table.SetCursor(0)
+}
+
+// statusEmoji resume el estado en un tick verde (resuelto) o una equis roja.
+func statusEmoji(status string) string {
+	if status == "resuelto" {
+		return okStyle.Render("✅")
+	}
+	return errStyle.Render("❌")
+}
+
+func lineTotalCell(total float64) string {
+	if total <= 0 {
+		return dimStyle.Render("—")
+	}
+	return money(total)
+}
+
+// itemsTotalView muestra el coste total de la compra con dígitos grandes.
+func (m *Model) itemsTotalView() string {
+	label := hintStyle.Render(totalIndent + "TOTAL COMPRA")
+	if m.grandTotal <= 0 {
+		return label + "  " + dimStyle.Render("—") + "\n"
+	}
+	return label + "\n" + bigMoney(m.grandTotal) + "\n"
 }
 
 func (m *Model) refreshCompare() {
@@ -202,6 +230,7 @@ func (m *Model) refreshCompare() {
 		cols = append(cols, table.Column{Title: report.ChainName(chainID), Width: clamp(m.width*24/100, 18, 50)})
 	}
 	cols = append(cols, table.Column{Title: "Más barato", Width: 12})
+	m.table.SetHeight(clamp(m.height-14, 5, 52))
 	m.table.SetRows(nil)
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
@@ -247,6 +276,7 @@ func (m *Model) refreshHistory() {
 			dimStyle.Render(c.FetchedAt.Format(time.DateTime)),
 		})
 	}
+	m.table.SetHeight(clamp(m.height-10, 5, 55))
 	m.table.SetRows(nil)
 	m.table.SetColumns([]table.Column{
 		{Title: "Cadena", Width: 12},

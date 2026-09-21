@@ -13,7 +13,6 @@ var (
 	colGreen   = lipgloss.Color("#3CB371")
 	colYellow  = lipgloss.Color("#E3B341")
 	colRed     = lipgloss.Color("#E06C75")
-	colCyan    = lipgloss.Color("#56B6C2")
 	colMuted   = lipgloss.Color("#7A7A7A")
 	colWhite   = lipgloss.Color("#F2F2F2")
 
@@ -25,29 +24,12 @@ var (
 	helpKeyStyle     = lipgloss.NewStyle().Bold(true).Foreground(colAccent2)
 	helpTextStyle    = lipgloss.NewStyle().Foreground(colMuted)
 
-	okStyle      = lipgloss.NewStyle().Foreground(colGreen).Bold(true)
-	warnStyle    = lipgloss.NewStyle().Foreground(colYellow)
-	errStyle     = lipgloss.NewStyle().Foreground(colRed).Bold(true)
-	changeStyle  = lipgloss.NewStyle().Foreground(colCyan)
-	pendingStyle = lipgloss.NewStyle().Foreground(colMuted)
-	dimStyle     = lipgloss.NewStyle().Foreground(colMuted)
-	accentStyle  = lipgloss.NewStyle().Foreground(colAccent2).Bold(true)
+	okStyle     = lipgloss.NewStyle().Foreground(colGreen).Bold(true)
+	warnStyle   = lipgloss.NewStyle().Foreground(colYellow)
+	errStyle    = lipgloss.NewStyle().Foreground(colRed).Bold(true)
+	dimStyle    = lipgloss.NewStyle().Foreground(colMuted)
+	accentStyle = lipgloss.NewStyle().Foreground(colAccent2).Bold(true)
 )
-
-func statusStyle(status string) lipgloss.Style {
-	switch status {
-	case "resuelto":
-		return okStyle
-	case "revisar":
-		return warnStyle
-	case "error", "descatalogado":
-		return errStyle
-	case "cambio":
-		return changeStyle
-	default:
-		return pendingStyle
-	}
-}
 
 func tableStyles() table.Styles {
 	s := table.DefaultStyles()
