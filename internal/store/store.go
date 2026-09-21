@@ -28,6 +28,7 @@ type Match struct {
 	SKU         string
 	MatchedName string
 	Score       float64
+	Available   bool
 }
 
 type Price struct {
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS matches (
 	sku          TEXT,
 	matched_name TEXT,
 	score        REAL NOT NULL DEFAULT 0,
+	available    INTEGER NOT NULL DEFAULT 1,
 	updated_at   TEXT NOT NULL,
 	PRIMARY KEY (item_id, chain)
 );
@@ -137,8 +139,10 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_url ON price_history(chain, product_url, fetched_at DESC);
 `
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	return ensureColumn(s.db, "matches", "available", "available INTEGER NOT NULL DEFAULT 1")
 }
 
 // SyncItems sincroniza la lista del fichero con la base de datos y devuelve
@@ -173,21 +177,36 @@ func (s *Store) SyncItems(items []list.Item) (map[string]int64, error) {
 
 func (s *Store) SetMatch(itemID int64, chainID string, p chain.Product, score float64) error {
 	_, err := s.db.Exec(`
-		INSERT INTO matches (item_id, chain, product_url, sku, matched_name, score, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO matches (item_id, chain, product_url, sku, matched_name, score, available, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
 		ON CONFLICT(item_id, chain) DO UPDATE SET
 			product_url = excluded.product_url,
 			sku = excluded.sku,
 			matched_name = excluded.matched_name,
 			score = excluded.score,
+			available = 1,
 			updated_at = excluded.updated_at`,
 		itemID, chainID, p.URL, p.SKU, p.Name, score, now())
 	return err
 }
 
+// SetMatchAvailable marca si el producto vinculado sigue disponible tras un
+// chequeo, sin cambiar la URL ni la puntuación del match.
+func (s *Store) SetMatchAvailable(itemID int64, chainID string, available bool) error {
+	flag := 0
+	if available {
+		flag = 1
+	}
+	_, err := s.db.Exec(`
+		UPDATE matches SET available = ?, updated_at = ? WHERE item_id = ? AND chain = ?`,
+		flag, now(), itemID, chainID)
+	return err
+}
+
 func (s *Store) Matches() ([]Match, error) {
 	rows, err := s.db.Query(`
-		SELECT i.id, i.name, i.quantity, m.chain, m.product_url, COALESCE(m.sku, ''), COALESCE(m.matched_name, ''), m.score
+		SELECT i.id, i.name, i.quantity, m.chain, m.product_url, COALESCE(m.sku, ''), COALESCE(m.matched_name, ''), m.score,
+		       COALESCE(m.available, 1)
 		FROM matches m
 		JOIN items i ON i.id = m.item_id
 		ORDER BY i.position, m.chain`)
@@ -198,9 +217,11 @@ func (s *Store) Matches() ([]Match, error) {
 	var out []Match
 	for rows.Next() {
 		var m Match
-		if err := rows.Scan(&m.ItemID, &m.ItemName, &m.Quantity, &m.Chain, &m.URL, &m.SKU, &m.MatchedName, &m.Score); err != nil {
+		var available int
+		if err := rows.Scan(&m.ItemID, &m.ItemName, &m.Quantity, &m.Chain, &m.URL, &m.SKU, &m.MatchedName, &m.Score, &available); err != nil {
 			return nil, err
 		}
+		m.Available = available == 1
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -244,6 +265,7 @@ func (s *Store) LatestPrice(chainID, url string) (Price, bool, error) {
 func (s *Store) LastMatchPrices() ([]MatchedPrice, error) {
 	rows, err := s.db.Query(`
 		SELECT i.id, i.name, i.quantity, m.chain, m.product_url, COALESCE(m.sku, ''), COALESCE(m.matched_name, ''), m.score,
+		       COALESCE(m.available, 1),
 		       COALESCE(h.price, 0), COALESCE(h.measure_price, 0), COALESCE(h.measure_unit, ''), COALESCE(h.old_price, 0),
 		       COALESCE(h.available, 0), COALESCE(h.format, ''), COALESCE(h.fetched_at, '')
 		FROM matches m
@@ -261,13 +283,13 @@ func (s *Store) LastMatchPrices() ([]MatchedPrice, error) {
 	var out []MatchedPrice
 	for rows.Next() {
 		var mp MatchedPrice
-		var available int
+		var matchAvailable, historyAvailable int
 		var fetched string
 		if err := rows.Scan(&mp.ItemID, &mp.ItemName, &mp.Quantity, &mp.Chain, &mp.URL, &mp.SKU, &mp.MatchedName, &mp.Score,
-			&mp.Price, &mp.MeasurePrice, &mp.MeasureUnit, &mp.OldPrice, &available, &mp.Format, &fetched); err != nil {
+			&matchAvailable, &mp.Price, &mp.MeasurePrice, &mp.MeasureUnit, &mp.OldPrice, &historyAvailable, &mp.Format, &fetched); err != nil {
 			return nil, err
 		}
-		mp.Available = available == 1
+		mp.Available = matchAvailable == 1 && historyAvailable == 1
 		mp.FetchedAt, _ = time.Parse(time.RFC3339, fetched)
 		out = append(out, mp)
 	}

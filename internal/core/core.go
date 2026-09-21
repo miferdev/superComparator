@@ -274,6 +274,9 @@ func (c *Core) Check(ctx context.Context, emit func(Event)) error {
 			mu.Lock()
 			defer mu.Unlock()
 			if errors.Is(err, chain.ErrNotFound) {
+				if markErr := c.store.SetMatchAvailable(m.ItemID, m.Chain, false); markErr != nil {
+					c.log.Debug("marcando no disponible", "item", m.ItemName, "err", markErr)
+				}
 				c.emit(emit, ProductDelisted{Item: m.ItemName, Chain: m.Chain})
 				delisted++
 				return
@@ -282,6 +285,11 @@ func (c *Core) Check(ctx context.Context, emit func(Event)) error {
 				c.emit(emit, ItemFailed{Item: m.ItemName, Chain: m.Chain, Err: err.Error()})
 				failed++
 				return
+			}
+			if !m.Available {
+				if markErr := c.store.SetMatchAvailable(m.ItemID, m.Chain, true); markErr != nil {
+					c.log.Debug("marcando disponible", "item", m.ItemName, "err", markErr)
+				}
 			}
 			if prev, okPrev, _ := c.store.LatestPrice(m.Chain, m.URL); okPrev && prev.Price != p.Price {
 				c.emit(emit, PriceChanged{Item: m.ItemName, Chain: m.Chain, Old: prev.Price, New: p.Price})

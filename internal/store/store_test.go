@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -68,6 +69,35 @@ func TestRoundTrip(t *testing.T) {
 	rows, err := st.LastMatchPrices()
 	if err != nil || len(rows) != 1 || rows[0].Price != 2.60 {
 		t.Fatalf("LastMatchPrices = %+v, %v", rows, err)
+	}
+}
+
+func TestOpenMigratesOldMatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE matches (
+		item_id      INTEGER NOT NULL,
+		chain        TEXT NOT NULL,
+		product_url  TEXT NOT NULL,
+		sku          TEXT,
+		matched_name TEXT,
+		score        REAL NOT NULL DEFAULT 0,
+		updated_at   TEXT NOT NULL,
+		PRIMARY KEY (item_id, chain));`); err != nil {
+		t.Fatalf("esquema antiguo: %v", err)
+	}
+	db.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open migrando: %v", err)
+	}
+	defer st.Close()
+	if err := st.SetMatchAvailable(1, "mercadona", false); err != nil {
+		t.Fatalf("la columna available no se migró: %v", err)
 	}
 }
 
