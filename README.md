@@ -64,7 +64,11 @@ go run ./cmd/supercomparator check
 | `SUPERCOMPARATOR_REPORT`     | `datos/informe.md`     | Informe markdown                     |
 | `SUPERCOMPARATOR_WORKERS`    | `3`                    | Peticiones en paralelo               |
 | `SUPERCOMPARATOR_DELAY_MS`   | `300`                  | Pausa entre peticiones               |
-| `SUPERCOMPARATOR_CANDIDATES` | `3`                    | Candidatos por cadena                |
+| `SUPERCOMPARATOR_CANDIDATES` | `6`                    | Candidatos que se descargan por cadena |
+| `SUPERCOMPARATOR_RANK_POOL`  | `15`                   | Candidatos puntuados en el sitemap   |
+| `SUPERCOMPARATOR_MIN_SCORE`  | `0`                    | Puntuación mínima para descargar un candidato |
+| `SUPERCOMPARATOR_MAX_PRICE_AGE_DAYS` | `0`            | Caducidad del precio en días (0 = sin límite) |
+| `SUPERCOMPARATOR_LOG`        | (vacío)                | Fichero de log (p. ej. `datos/app.log`); registra cada match con su similitud |
 | `SUPERCOMPARATOR_BROWSER_BIN`| (auto)                 | Binario de Chromium                  |
 
 ## Desarrollo
