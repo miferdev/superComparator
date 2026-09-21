@@ -44,11 +44,17 @@ func Generate(cmp core.Comparison) string {
 			}
 			if opt.Promo {
 				cell += " · OFERTA"
+				if opt.OldPrice > 0 {
+					cell += fmt.Sprintf(" (antes %s)", money(opt.OldPrice))
+				}
+			}
+			if opt.Stale {
+				cell += " · desactualizado"
 			}
 			fmt.Fprintf(&b, " %s |", cell)
 		}
 		if item.Cheapest != "" {
-			fmt.Fprintf(&b, " %s |\n", ChainName(item.Cheapest))
+			fmt.Fprintf(&b, " %s |\n", CheapestLabel(item))
 		} else {
 			b.WriteString(" — |\n")
 		}
@@ -109,10 +115,13 @@ func Console(cmp core.Comparison) string {
 			if opt.Promo {
 				cell += " · oferta"
 			}
+			if opt.Stale {
+				cell += " · desactualizado"
+			}
 			fmt.Fprintf(w, "\t%s", cell)
 		}
 		if item.Cheapest != "" {
-			fmt.Fprintf(w, "\t%s", ChainName(item.Cheapest))
+			fmt.Fprintf(w, "\t%s", CheapestLabel(item))
 		} else {
 			fmt.Fprint(w, "\t—")
 		}
@@ -149,6 +158,16 @@ func ChainName(id string) string {
 	default:
 		return id
 	}
+}
+
+// CheapestLabel añade el criterio usado (€/kg, €/l o total) al ganador del
+// producto, para que se entienda por qué se eligió.
+func CheapestLabel(item core.ItemComparison) string {
+	label := ChainName(item.Cheapest)
+	if item.Criterion != "" {
+		label += " (" + item.Criterion + ")"
+	}
+	return label
 }
 
 func money(v float64) string {

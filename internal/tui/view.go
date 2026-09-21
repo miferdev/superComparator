@@ -172,7 +172,7 @@ func (m *Model) refreshCompare() {
 		for _, chainID := range m.cmp.Chains {
 			row = append(row, optionCell(item, chainID))
 		}
-		row = append(row, okStyle.Render(report.ChainName(item.Cheapest)))
+		row = append(row, okStyle.Render(report.CheapestLabel(item)))
 		rows = append(rows, row)
 	}
 	cols := []table.Column{
@@ -202,6 +202,9 @@ func optionCell(item core.ItemComparison, chainID string) string {
 		}
 		if opt.Promo {
 			cell += " · oferta"
+		}
+		if opt.Stale {
+			cell += " · desactualizado"
 		}
 		if opt.Chain == item.Cheapest {
 			return okStyle.Render(cell)

@@ -38,3 +38,24 @@ func TestGenerate(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateCriterioYDesactualizado(t *testing.T) {
+	cmp := core.Comparison{
+		Chains: []string{"mercadona", "ahorramas"},
+		Totals: map[string]float64{"mercadona": 2.0, "ahorramas": 2.3},
+		Items: []core.ItemComparison{{
+			Name: "Leche", Quantity: 1, Cheapest: "mercadona", Criterion: "€/l",
+			Options: []core.ChainOption{
+				{Chain: "mercadona", Product: "Leche A", Price: 2.0, MeasurePrice: 2.0, MeasureUnit: "l", Stale: true},
+				{Chain: "ahorramas", Product: "Leche B", Price: 2.3, MeasurePrice: 2.3, MeasureUnit: "l", Promo: true, OldPrice: 2.8},
+			},
+		}},
+		MixedTotal: 2.0, CheapestChain: "mercadona", GeneratedAt: time.Now(),
+	}
+	out := Generate(cmp)
+	for _, want := range []string{"Mercadona (€/l)", "desactualizado", "antes 2,80 €"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("el informe no contiene %q:\n%s", want, out)
+		}
+	}
+}
