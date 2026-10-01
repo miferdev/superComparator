@@ -3,16 +3,13 @@ services:
     build: .
     image: supercomparator:latest
     init: true
-    stdin_open: true
-    tty: true
     shm_size: "1gb"
     environment:
       TERM: ${TERM:-xterm-256color}
       SUPERCOMPARATOR_CP: "28032"
-      SUPERCOMPARATOR_LISTA_DIR: /compras
+      SUPERCOMPARATOR_LISTA: /compras/lista.md
       SUPERCOMPARATOR_DB: /datos/precios.db
       SUPERCOMPARATOR_REPORT: /datos/informe.md
-      SUPERCOMPARATOR_LOG: ${SUPERCOMPARATOR_LOG:-}
     volumes:
       - .:/compras:ro
       - ./datos:/datos

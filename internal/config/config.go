@@ -13,7 +13,6 @@ const DefaultPostalCode = "28032"
 type Config struct {
 	PostalCode  string
 	ListaPath   string
-	ListaDir    string
 	DBPath      string
 	ReportPath  string
 	Workers     int
@@ -31,8 +30,7 @@ func Load() Config {
 	db := env("SUPERCOMPARATOR_DB", filepath.Join("datos", "precios.db"))
 	c := Config{
 		PostalCode:  env("SUPERCOMPARATOR_CP", DefaultPostalCode),
-		ListaPath:   env("SUPERCOMPARATOR_LISTA", ""),
-		ListaDir:    env("SUPERCOMPARATOR_LISTA_DIR", ""),
+		ListaPath:   env("SUPERCOMPARATOR_LISTA", "lista.md"),
 		DBPath:      db,
 		ReportPath:  env("SUPERCOMPARATOR_REPORT", filepath.Join(filepath.Dir(db), "informe.md")),
 		Workers:     envInt("SUPERCOMPARATOR_WORKERS", 3),
@@ -45,12 +43,8 @@ func Load() Config {
 		BrowserBin:  env("SUPERCOMPARATOR_BROWSER_BIN", os.Getenv("ROD_BROWSER_BIN")),
 		LogPath:     env("SUPERCOMPARATOR_LOG", ""),
 	}
-	if c.ListaDir == "" {
-		if _, err := os.Stat("/compras"); err == nil {
-			c.ListaDir = "/compras"
-		} else {
-			c.ListaDir = "."
-		}
+	if c.ListaPath == "" {
+		c.ListaPath = "lista.md"
 	}
 	return c
 }

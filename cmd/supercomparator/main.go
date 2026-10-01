@@ -1,4 +1,4 @@
-// Comando supercomparator: TUI por defecto y subcomandos para cron.
+// Comando supercomparator: procesa lista.md y escribe el informe markdown.
 package main
 
 import (
@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/miferdev/superComparator/internal/chain"
@@ -23,7 +22,6 @@ import (
 	"github.com/miferdev/superComparator/internal/match"
 	"github.com/miferdev/superComparator/internal/report"
 	"github.com/miferdev/superComparator/internal/store"
-	"github.com/miferdev/superComparator/internal/tui"
 )
 
 const version = "0.1.0"
@@ -31,7 +29,6 @@ const version = "0.1.0"
 type flags struct {
 	cp         string
 	lista      string
-	listaDir   string
 	db         string
 	reportPath string
 	browserBin string
@@ -45,24 +42,18 @@ type flags struct {
 func main() {
 	var f flags
 	root := &cobra.Command{
-		Use:          "supercomparator",
-		Short:        "Compara precios de la compra entre Mercadona y Ahorramas",
+		Use:   "supercomparator",
+		Short: "Compara precios de la compra entre Mercadona y Ahorramas",
+		Long: "Procesa la lista de la compra (lista.md), resuelve cada producto en las " +
+			"cadenas configuradas y escribe el informe markdown con la opción más barata.",
 		SilenceUsage: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg := loadConfig(&f)
-			c, cleanup, err := build(cfg)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-			_, err = tea.NewProgram(tui.New(cfg, c, loggerFor(cfg))).Run()
-			return err
+			return run(loadConfig(&f))
 		},
 	}
 	pf := root.PersistentFlags()
 	pf.StringVar(&f.cp, "cp", "", "código postal (por defecto 28032)")
-	pf.StringVar(&f.lista, "lista", "", "ruta de lista.md")
-	pf.StringVar(&f.listaDir, "lista-dir", "", "carpeta del selector de listas")
+	pf.StringVar(&f.lista, "lista", "", "ruta de lista.md (por defecto lista.md)")
 	pf.StringVar(&f.db, "db", "", "ruta de la base SQLite")
 	pf.StringVar(&f.reportPath, "report", "", "ruta del informe markdown")
 	pf.StringVar(&f.browserBin, "browser-bin", "", "binario de Chromium para Mercadona")
@@ -77,6 +68,47 @@ func main() {
 	}
 }
 
+// run es el flujo por defecto: resolver lo que falte, comprobar precios y
+// escribir el informe markdown.
+func run(cfg config.Config) error {
+	if cfg.ListaPath == "" {
+		cfg.ListaPath = "lista.md"
+	}
+	items, err := list.ParseFile(cfg.ListaPath)
+	if err != nil {
+		return err
+	}
+	c, cleanup, err := build(cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	matches, _ := c.Store().Matches()
+	if needsResolve(matches, items, len(c.Chains())) {
+		fmt.Println("Resolviendo productos…")
+		if err := c.Resolve(ctx, items, printEvent); err != nil {
+			return err
+		}
+	}
+	fmt.Println("Comprobando precios…")
+	if err := c.Check(ctx, printEvent); err != nil {
+		return err
+	}
+	cmp, err := c.Comparison(ctx)
+	if err != nil {
+		return err
+	}
+	if err := report.Write(cfg.ReportPath, cmp); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Print(report.Console(cmp))
+	fmt.Printf("Informe: %s\n", cfg.ReportPath)
+	return nil
+}
+
 func loadConfig(f *flags) config.Config {
 	cfg := config.Load()
 	if f.cp != "" {
@@ -84,9 +116,6 @@ func loadConfig(f *flags) config.Config {
 	}
 	if f.lista != "" {
 		cfg.ListaPath = f.lista
-	}
-	if f.listaDir != "" {
-		cfg.ListaDir = f.listaDir
 	}
 	if f.db != "" {
 		cfg.DBPath = f.db
@@ -143,46 +172,11 @@ func loggerFor(cfg config.Config) *slog.Logger {
 
 func checkCmd(f *flags) *cobra.Command {
 	return &cobra.Command{
-		Use:   "check",
-		Short: "Resuelve y comprueba la lista sin interfaz (cron)",
+		Use:        "check",
+		Short:      "Resuelve y comprueba la lista sin imprimir la comparativa",
+		Deprecated: "usa el comando principal: supercomparator",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg := loadConfig(f)
-			if cfg.ListaPath == "" {
-				cfg.ListaPath = "lista.md"
-			}
-			items, err := list.ParseFile(cfg.ListaPath)
-			if err != nil {
-				return err
-			}
-			c, cleanup, err := build(cfg)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-
-			ctx := context.Background()
-			matches, _ := c.Store().Matches()
-			if needsResolve(matches, len(items), len(c.Chains())) {
-				fmt.Println("Resolviendo productos…")
-				if err := c.Resolve(ctx, items, printEvent); err != nil {
-					return err
-				}
-			}
-			fmt.Println("Comprobando precios…")
-			if err := c.Check(ctx, printEvent); err != nil {
-				return err
-			}
-			cmp, err := c.Comparison(ctx)
-			if err != nil {
-				return err
-			}
-			if err := report.Write(cfg.ReportPath, cmp); err != nil {
-				return err
-			}
-			fmt.Println()
-			fmt.Print(report.Console(cmp))
-			fmt.Printf("Informe: %s\n", cfg.ReportPath)
-			return nil
+			return run(loadConfig(f))
 		},
 	}
 }
@@ -253,8 +247,20 @@ func versionCmd() *cobra.Command {
 	}
 }
 
-func needsResolve(matches []store.Match, items, chains int) bool {
-	if len(matches) < items*chains {
+// needsResolve indica si hay que resolver de nuevo. Compara los nombres de la
+// lista con los ya resueltos: si falta alguno, sobran algunos del histórico o
+// alguno quedó con una coincidencia dudosa.
+func needsResolve(matches []store.Match, items []list.Item, chains int) bool {
+	resueltos := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		resueltos[m.ItemName] = true
+	}
+	for _, it := range items {
+		if !resueltos[it.Name] {
+			return true
+		}
+	}
+	if len(resueltos) != len(items) {
 		return true
 	}
 	for _, m := range matches {
