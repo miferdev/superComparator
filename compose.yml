@@ -2,6 +2,7 @@ services:
   app:
     build: .
     image: supercomparator:latest
+    user: "${UID:-1000}:${GID:-1000}"
     init: true
     shm_size: "1gb"
     environment:
