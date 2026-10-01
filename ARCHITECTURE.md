@@ -20,6 +20,7 @@ internal/
     dia/        HTTP + JSON-LD, con Lookup por categoría (su sitemap no lleva nombre)
     alcampo/    sitemaps por HTTP + rod (WAF; desactivada por defecto)
   store/     SQLite (items, matches, price_history, alternatives)
+  version/   versión y commit inyectados con -ldflags y escritos en los informes
   core/      orquestador + eventos; usa chain, match y store
   report/    informes por cadena, comparativa y consola (depende de los tipos de core)
 ```
@@ -68,9 +69,13 @@ cadena) y `version` son auxiliares. No hay interfaz interactiva.
 5. `internal/chain/dia/` — adaptador con `Lookup`: el catálogo no se puede
    resolver con el sitemap y la cadena busca ella misma.
 6. `internal/chain/mercadona/` — adaptador con navegador headless y CP.
-7. `internal/list/` y `internal/match/` — lógica pura y sus tests.
-8. `internal/store/` — esquema SQLite e historial.
-9. `internal/report/` — informes por cadena, comparativa y salida de consola.
+7. `internal/match/` — normalización, reglas de coincidencia y `Evaluar`, que
+   devuelve el veredicto con sus motivos; todo puro y con tests.
+8. `internal/core/candidatos.go` — descargar, evaluar y elegir; lo usan tanto la
+   resolución como `explain`, para que no puedan divergir.
+9. `internal/list/` y el resto de la lógica pura.
+10. `internal/store/` — esquema SQLite e historial.
+11. `internal/report/` — informes por cadena, comparativa, explicación y consola.
 
 ## Reglas del proyecto
 

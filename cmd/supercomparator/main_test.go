@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/miferdev/superComparator/internal/list"
 	"github.com/miferdev/superComparator/internal/match"
 	"github.com/miferdev/superComparator/internal/store"
+	"github.com/miferdev/superComparator/internal/version"
 )
 
 func match_(item string, score float64) store.Match {
@@ -125,5 +127,46 @@ func TestSelectChainsAlcampoNoVienePorDefecto(t *testing.T) {
 		if ch.ID() == "alcampo" {
 			t.Error("Alcampo no debe compararse por defecto: su WAF bloquea las fichas")
 		}
+	}
+}
+
+// TestReglasCambiadas cubre el fallo de los informes viejos: si la lista se
+// resolvió con otras reglas, los matches guardados ya no son de fiar y hay que
+// resolverla entera, aunque sus puntuaciones sean buenas.
+func TestReglasCambiadas(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "meta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	cambia, err := reglasCambiadas(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cambia {
+		t.Error("una base sin versión guardada debe considerarse antigua")
+	}
+
+	if err := st.SetMeta(metaMatchVersion, version.Matching); err != nil {
+		t.Fatal(err)
+	}
+	cambia, err = reglasCambiadas(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cambia {
+		t.Error("con la versión actual guardada no hay que re-resolver")
+	}
+
+	if err := st.SetMeta(metaMatchVersion, "0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	cambia, err = reglasCambiadas(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cambia {
+		t.Error("con una versión distinta hay que re-resolver")
 	}
 }

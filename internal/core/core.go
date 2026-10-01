@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 
@@ -160,107 +159,55 @@ func (c *Core) resolveItem(ctx context.Context, item list.Item, itemID int64, ya
 }
 
 func (c *Core) resolveItemInChain(ctx context.Context, item list.Item, itemID int64, chainID string, emit func(Event)) error {
-	ch := c.chains[chainID]
-	pool, maxCandidates := c.candidateLimits()
-	ranked, err := c.candidates(ctx, item.Name, chainID)
+	// Primero se borra lo que hubiera: al volver a resolver, o queda el
+	// producto nuevo o no queda nada. Un match que sobreviviera sería de una
+	// versión anterior de las reglas y podría no ser lo que se pidió.
+	if err := c.store.ClearMatch(itemID, chainID); err != nil {
+		return fmt.Errorf("limpiando match anterior: %w", err)
+	}
+	descargados, err := c.descargarCandidatos(ctx, item.Name, chainID)
 	if err != nil {
 		return err
 	}
-	if len(ranked) == 0 {
-		return errors.New("sin candidatos en el catálogo")
+	candidatos, alternativas := evaluarCandidatos(item.Name, descargados)
+	if len(candidatos) == 0 {
+		if len(alternativas) == 0 {
+			return errors.New("ningún candidato disponible")
+		}
+		return errors.New("ningún candidato encaja con lo pedido")
 	}
 
-	type candidate struct {
-		product chain.Product
-		score   float64
-	}
-	var candidates []candidate
-	alternatives := make([]Alternative, 0, len(ranked))
-	fetched := 0
-	for _, cand := range ranked {
-		if len(candidates) >= maxCandidates || fetched >= pool {
-			break
+	mejor, ok := elegirCandidato(candidatos)
+	if !ok {
+		// Una coincidencia dudosa no entra en la comparativa: un precio de un
+		// producto que no es el pedido falsearía el total. Se guarda igualmente
+		// como alternativa para que el informe la muestre y decida el usuario.
+		if err := c.store.ReplaceAlternatives(itemID, chainID, alternativas); err != nil {
+			return fmt.Errorf("guardando alternativas: %w", err)
 		}
-		if cand.Score < c.cfg.MinScore {
-			continue
-		}
-		if fetched > 0 {
-			time.Sleep(c.cfg.Delay)
-		}
-		fetched++
-		p, err := ch.Fetch(ctx, cand.Entry.URL)
-		if err != nil {
-			c.log.Debug("candidato descartado", "url", cand.Entry.URL, "err", err)
-			continue
-		}
-		if !p.Available || p.Price <= 0 {
-			continue
-		}
-		score := match.Similarity(item.Name, p.Name, p.Format)
-		if score <= 0 {
-			// Ni una palabra en común: no es el producto buscado.
-			c.log.Debug("candidato descartado por no encajar", "url", cand.Entry.URL, "producto", p.Name)
-			continue
-		}
-		alternatives = append(alternatives, Alternative{
-			URL: p.URL, Name: p.Name, Score: score,
-			Price: p.Price, MeasurePrice: p.MeasurePrice, MeasureUnit: p.MeasureUnit,
-		})
-		candidates = append(candidates, candidate{product: p, score: score})
-	}
-	if len(candidates) == 0 {
-		return errors.New("ningún candidato disponible")
+		c.emit(emit, ItemNeedsReview{Item: item.Name})
+		return fmt.Errorf("sin coincidencia suficiente (%.2f): %s", mejor.score, mejor.product.Name)
 	}
 
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.score > best.score {
-			best = c
-		}
-	}
-	// Si hay opciones que encajan bien, se muestra la más barata de ellas
-	// aplicando la misma regla que en la comparativa.
-	eligible := make([]comparable, 0, len(candidates))
-	indexes := make([]int, 0, len(candidates))
-	for i, c := range candidates {
-		if c.score < match.AutoThreshold {
-			continue
-		}
-		eligible = append(eligible, comparableOfProduct(c.product))
-		indexes = append(indexes, i)
-	}
-	if k, _ := cheapestIndex(eligible); k >= 0 {
-		best = candidates[indexes[k]]
-	}
-
-	sort.Slice(alternatives, func(i, j int) bool { return alternatives[i].Score > alternatives[j].Score })
-
-	if err := c.store.ReplaceAlternatives(itemID, chainID, alternatives); err != nil {
+	if err := c.store.ReplaceAlternatives(itemID, chainID, alternativas); err != nil {
 		return fmt.Errorf("guardando alternativas: %w", err)
 	}
-	// Una coincidencia dudosa no entra en la comparativa: un precio de un
-	// producto que no es el pedido falsearía el total. Se guarda igualmente
-	// como alternativa para que el informe la muestre y decida el usuario.
-	if best.score < match.AutoThreshold {
-		c.emit(emit, ItemNeedsReview{Item: item.Name})
-		return fmt.Errorf("sin coincidencia suficiente (%.2f): %s", best.score, best.product.Name)
-	}
-	if err := c.store.SetMatch(itemID, chainID, best.product, best.score); err != nil {
+	if err := c.store.SetMatch(itemID, chainID, mejor.product, mejor.score); err != nil {
 		return fmt.Errorf("guardando match: %w", err)
 	}
-	if err := c.store.InsertPrice(chainID, best.product); err != nil {
+	if err := c.store.InsertPrice(chainID, mejor.product); err != nil {
 		return fmt.Errorf("guardando precio: %w", err)
 	}
 	c.log.Info("match resuelto",
 		"item", item.Name,
 		"chain", chainID,
-		"product", best.product.Name,
-		"score", best.score,
-		"price", best.product.Price,
-		"measure_price", best.product.MeasurePrice,
-		"measure_unit", best.product.MeasureUnit,
+		"product", mejor.product.Name,
+		"score", mejor.score,
+		"price", mejor.product.Price,
+		"measure_price", mejor.product.MeasurePrice,
+		"measure_unit", mejor.product.MeasureUnit,
 	)
-	c.emit(emit, ChainResolved{Item: item.Name, Chain: chainID, Product: best.product, Score: best.score, Alternatives: alternatives})
+	c.emit(emit, ChainResolved{Item: item.Name, Chain: chainID, Product: mejor.product, Score: mejor.score, Alternatives: alternativas})
 	return nil
 }
 

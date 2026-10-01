@@ -22,18 +22,29 @@ func TestCheapestIndex(t *testing.T) {
 		criterion string
 	}{
 		{
-			name: "misma unidad: gana el menor €/kg aunque cueste más",
+			// Lo que se paga por una unidad de la lista manda, aunque el otro
+			// sea mucho más barato por kilo: son cantidades distintas.
+			name: "gana el precio más bajo aunque el otro sea mejor por kg",
+			opts: []comparable{
+				{price: 1.70, measurePrice: 11.33, measureUnit: "kg", available: true},
+				{price: 3.18, measurePrice: 1.99, measureUnit: "kg", available: true},
+			},
+			want:      0,
+			criterion: criterionTotal,
+		},
+		{
+			name: "empate de precio: desempata el menor €/kg",
 			opts: []comparable{
 				{price: 2, measurePrice: 8, measureUnit: "kg", available: true},
-				{price: 3, measurePrice: 6, measureUnit: "kg", available: true},
+				{price: 2, measurePrice: 6, measureUnit: "kg", available: true},
 			},
 			want:      1,
 			criterion: criterionPerKg,
 		},
 		{
-			name: "misma unidad: gana el menor €/l",
+			name: "empate de precio: desempata el menor €/l",
 			opts: []comparable{
-				{price: 2, measurePrice: 2.5, measureUnit: "l", available: true},
+				{price: 1.8, measurePrice: 2.5, measureUnit: "l", available: true},
 				{price: 1.8, measurePrice: 1.9, measureUnit: "l", available: true},
 			},
 			want:      1,
@@ -65,7 +76,7 @@ func TestCheapestIndex(t *testing.T) {
 				{price: 2.2, measurePrice: 2.3, measureUnit: "l", available: true},
 			},
 			want:      1,
-			criterion: criterionPerL,
+			criterion: criterionTotal,
 		},
 		{
 			name: "sin opciones válidas",
@@ -136,19 +147,19 @@ func comparisonSeededWith(t *testing.T, maxAge time.Duration, opts ...seedOption
 	return cmp
 }
 
-func TestComparisonUsaPrecioPorMedida(t *testing.T) {
+func TestComparisonUsaPrecioAbsoluto(t *testing.T) {
 	cmp := comparisonSeeded(t,
 		seedOption{chain: "mercadona", price: 2.00, measurePrice: 2.00, measureUnit: "l", available: true},
 		seedOption{chain: "ahorramas", price: 1.80, measurePrice: 2.50, measureUnit: "l", available: true},
 	)
 	item := cmp.Items[0]
-	if item.Cheapest != "mercadona" || item.Criterion != criterionPerL {
+	if item.Cheapest != "ahorramas" || item.Criterion != criterionTotal {
 		t.Fatalf("comparativa = %+v", item)
 	}
-	if item.CheapestPrice != 2.00 {
+	if item.CheapestPrice != 1.80 {
 		t.Fatalf("CheapestPrice = %v", item.CheapestPrice)
 	}
-	if diff := cmp.MixedTotal - 2.00*2; diff > 1e-9 || diff < -1e-9 {
+	if diff := cmp.MixedTotal - 1.80*2; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("MixedTotal = %v", cmp.MixedTotal)
 	}
 }

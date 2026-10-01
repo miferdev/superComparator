@@ -24,10 +24,12 @@ ejemplo en `lista.ejemplo.md`. El fichero personal se ignora en git.
 ## Uso con Docker
 
 ```sh
-docker compose up
+docker compose up --build
 ```
 
-La primera vez construye la imagen. El programa lee `lista.md` de la raíz del
+`--build` es importante: sin él Docker reutiliza la imagen anterior y los
+informes pueden salir con código viejo (por eso cada informe lleva su versión y
+commit en la cabecera). `make up` ya lo incluye. El programa lee `lista.md` de la raíz del
 repositorio, resuelve cada producto en las tres cadenas, comprueba los precios y
 escribe los informes en `./datos/`. No hay interfaz interactiva: termina solo.
 
@@ -89,6 +91,31 @@ Para comparar solo algunas cadenas:
 docker compose run --rm app --cadenas mercadona,dia
 ```
 
+## Ver por qué se eligió cada producto
+
+Cuando un producto no aparece o te sale una marca rara, `explain` enseña los
+candidatos que se han mirado en cada cadena, su puntuación y el motivo de cada
+rechazo:
+
+```sh
+docker compose run --rm app explain
+docker compose run --rm app explain fresas calabaza
+```
+
+Escribe `datos/explicacion.md` y lo muestra en la terminal. No guarda nada en la
+base de datos ni toca los informes.
+
+Ejemplo:
+
+```
+pipas de calabaza
+  Mercadona
+    1,00 1,55 €  **elegido**                    Pipas calabaza tostadas Hacendado aguasal
+    0,40 1,55 €  descartado: el sustantivo …    Pan de molde semillas y pipas de calabaza
+  DÍA
+    0,23 3,18 €  descartado: el sustantivo …    Calabaza 1.6 Kg aprox.
+```
+
 ## Los informes
 
 **`datos/<cadena>.md`** copia tu lista tal cual y añade el producto encontrado,
@@ -110,8 +137,18 @@ nombre del producto elegido y el enlace. Añade secciones solo si hacen falta:
   es lo que impide cerrar la lista del todo.
 - **Revisar**: productos que ninguna cadena resolvió con confianza, con enlaces a
   los candidatos más parecidos para que decidas tú. El programa es conservador a
-  propósito: si el candidato es otro producto que contiene el tuyo (la mermelada
-  entre las fresas, el pan entre las pipas) no lo acepta. Un producto no entra en los
+  propósito, y estas son las reglas que aplica (ver `explain` para verlas sobre
+  tus productos):
+  - si el sustantivo del candidato no es el tuyo, o el tuyo no aparece, es otro
+    producto que lleva lo tuyo dentro («fresas» no es «mermelada de fresa»);
+  - las palabras derivadas cuentan como la misma: «congelada» y
+    «ultracongelada», «tomate» y «tomates»;
+  - congelado, deshidratado, entero, desnatado, natural, integral y light son
+    variantes distintas: si no las pides, no se aceptan;
+  - un pack o un formato muy distinto se rechaza, para no multiplicar mal el
+    total;
+  - de entre los que sí encajan gana el más barato por precio absoluto, que es lo
+    que pagas por cada unidad de la lista. Un producto no entra en los
   totales mientras sea dudoso, para no falsear el sumatorio.
 
 En consola se imprime la misma comparativa en texto plano.

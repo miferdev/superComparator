@@ -39,9 +39,14 @@ func comparableOfOption(o ChainOption) comparable {
 }
 
 // cheapestIndex elige la opción más barata con una regla explícita y devuelve
-// también el criterio usado. Nunca compara €/medida de dimensiones distintas
-// (kg frente a l) ni €/medida con un precio total: si no hay al menos dos
-// opciones cotizando en la misma unidad canónica, decide por precio total.
+// también el criterio usado.
+//
+// Decide por precio absoluto, que es lo que se paga por cada unidad de la lista.
+// El precio por kilo o litro se usa solo como desempate cuando dos opciones
+// cuestan exactamente lo mismo, porque comparar 1,99 €/kg de una calabaza con
+// 11,33 €/kg de unas pipas llevaría a comprar algo que no es lo pedido. El
+// formato ya se filtra antes, al resolver: un pack de 6 briks no compite con
+// una unidad suelta.
 func cheapestIndex(opts []comparable) (int, string) {
 	valid := make([]int, 0, len(opts))
 	for i, o := range opts {
@@ -52,38 +57,48 @@ func cheapestIndex(opts []comparable) (int, string) {
 	if len(valid) == 0 {
 		return -1, ""
 	}
-	if idx, ok := cheapestByMeasure(opts, valid, "kg"); ok {
-		return idx, criterionPerKg
-	}
-	if idx, ok := cheapestByMeasure(opts, valid, "l"); ok {
-		return idx, criterionPerL
-	}
 	best := valid[0]
 	for _, i := range valid[1:] {
 		if opts[i].price < opts[best].price {
 			best = i
 		}
 	}
+	if idx, ok := cheaperByMeasure(opts, best, valid); ok {
+		return idx, criterionByMeasure(opts[idx])
+	}
 	return best, criterionTotal
 }
 
-// cheapestByMeasure solo decide por €/medida cuando al menos dos opciones
-// cotizan en la misma unidad canónica; con una sola no son comparables.
-func cheapestByMeasure(opts []comparable, valid []int, unit string) (int, bool) {
-	best, count := -1, 0
-	for _, i := range valid {
-		if opts[i].measureUnit != unit || opts[i].measurePrice <= 0 {
+// cheaperByMeasure rompe un empate exacto de precio usando el precio por kilo o
+// litro, y solo entre opciones que cotizan en la misma unidad.
+func cheaperByMeasure(opts []comparable, best int, valid []int) (int, bool) {
+	for _, unit := range []string{"kg", "l"} {
+		candidatos := make([]int, 0, len(valid))
+		for _, i := range valid {
+			if opts[i].measureUnit == unit && opts[i].measurePrice > 0 {
+				candidatos = append(candidatos, i)
+			}
+		}
+		if len(candidatos) < 2 {
 			continue
 		}
-		count++
-		if best == -1 || opts[i].measurePrice < opts[best].measurePrice {
-			best = i
+		for _, i := range candidatos {
+			if opts[i].price != opts[best].price {
+				continue
+			}
+			if opts[i].measurePrice < opts[best].measurePrice {
+				return i, true
+			}
 		}
 	}
-	if count < 2 {
-		return -1, false
+	return -1, false
+}
+
+func criterionByMeasure(o comparable) string {
+	if o.measureUnit == "kg" {
+		return criterionPerKg
 	}
-	return best, true
+	return criterionPerL
 }
 
 // CheapestIndex expone la regla de comparación (índice y criterio) para que la

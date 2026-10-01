@@ -1,6 +1,7 @@
 package match
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/miferdev/superComparator/internal/chain"
@@ -120,7 +121,7 @@ func TestSimilarityNoAceptaPorLaMedida(t *testing.T) {
 		{"Pan de molde blanco", "Pan de molde blanco Hacendado", "", true},
 		{"Pan de molde blanco", "Pan de molde sin corteza Alipende 450g", "450 g", true},
 		{"copos de avena suaves", "Copos de avena Brüggen", "", true},
-		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", true},
+		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", false},
 		{"Kéfir natural", "Kéfir de fresa y frambuesa Activia 4 x 125 g", "4 x 125 g", false},
 	}
 	for _, c := range casos {
@@ -182,13 +183,22 @@ func TestSimilarityProductoQueLoLlevaDentro(t *testing.T) {
 		{"fresas", "Sirope Alipende 300g fresa", "300 g", false},
 		{"pipas de calabaza", "Pan de molde semillas y pipas de calabaza Hacendado", "", false},
 		{"pipas de calabaza", "Pipas de calabaza peladas 100 g", "100 g", true},
+		{"pipas de calabaza", "Calabaza 1,6 Kg aprox.", "1,6 kg", false},
+		{"alcachofa congelada", "Alcachofa Troceada Hacendado Ultracongelada Paquete", "1 kg", true},
+		{"arándanos", "Arándanos enteros ultracongelados paquete", "500 g", false},
+		{"arándanos", "Arándanos vaso", "", true},
+		{"Leche semidesnatada 1L", "Leche entera Asturiana 1 L", "1 L", false},
+		{"Leche semidesnatada 1L", "Leche semidesnatada Asturiana 1 L", "1 L", true},
+		{"Yogur griego desnatado", "Yogur griego natural Hacendado", "", false},
+		{"Pan de molde blanco", "Pan de molde integral Hacendado", "", false},
+		{"Yogur griego", "Yogur griego light natural", "", true},
 		{"Leche semidesnatada 1L", "Leche semidesnatada Hacendado", "1 L", true},
 		{"Leche semidesnatada 1L", "Leche Asturiana 1l semidesnatada", "1 L", true},
 		{"Leche entera 1L", "Leche entera Asturiana 1 L", "1 L", true},
 		{"Pan de molde blanco", "Pan de molde blanco Hacendado", "600 g", true},
 		{"Pan de molde blanco", "Pan de molde sin corteza Alipende 450g", "450 g", true},
 		{"copos de avena suaves", "Copos de avena Brüggen", "500 g", true},
-		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", true},
+		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", false},
 		{"Kéfir natural", "Kéfir natural sabor suave", "1 kg", true},
 	}
 	for _, c := range casos {
@@ -217,4 +227,92 @@ func TestHeadMismatch(t *testing.T) {
 			t.Errorf("headMismatch(%q, %q) = %v, want %v", c.query, c.name, got, c.mismatch)
 		}
 	}
+}
+
+// TestSameToken cubre la tolerancia morfológica: el lematizador deja
+// «congelada» y «ultracongelada» como palabras distintas, pero son la misma.
+func TestSameToken(t *testing.T) {
+	casos := []struct {
+		query, name string
+		want        bool
+	}{
+		{"alcachofa congelada", "alcachofa ultracongelada", true},
+		{"fresas", "fresa", true},
+		{"tomate", "tomates", true},
+		{"pipas de calabaza", "calabaza", false},
+		{"pipas", "pimientos", false},
+		{"desnatada", "entera", false},
+	}
+	for _, c := range casos {
+		got := sameToken(tokenOf(c.query), tokenOf(c.name))
+		if got != c.want {
+			t.Errorf("sameToken(%q, %q) = %v, want %v", c.query, c.name, got, c.want)
+		}
+	}
+}
+
+// TestVariantMismatch documenta qué palabras se consideran otro producto.
+func TestVariantMismatch(t *testing.T) {
+	casos := []struct {
+		query, name string
+		want        string // "" si son la misma variante
+	}{
+		{"arándanos", "Arándanos enteros ultracongelados paquete", "es ultracongelado y no se pidió"},
+		{"arándanos", "Arándanos vaso", ""},
+		{"Leche desnatada 1L", "Leche entera Asturiana 1 L", "se pidió desnatada y es entera"},
+		{"Leche semidesnatada 1L", "Leche semidesnatada Asturiana 1 L", ""},
+		{"alcachofa congelada", "Alcachofa ultracongelada", ""},
+		{"Pan de molde blanco", "Pan de molde integral", "es integral y no se pidió"},
+		{"Yogur griego", "Yogur griego light", ""},
+		{"Yogur griego light", "Yogur griego bio", "se pidió light"},
+	}
+	for _, c := range casos {
+		if got := variantMismatch(nameTokens(c.query), nameTokens(c.name)); got != c.want {
+			t.Errorf("variantMismatch(%q, %q) = %q, want %q", c.query, c.name, got, c.want)
+		}
+	}
+}
+
+// TestEvaluarExplicaElMotivo es lo que usa el comando explain para enseñar por
+// qué se acepta o se rechaza cada candidato.
+func TestEvaluarExplicaElMotivo(t *testing.T) {
+	casos := []struct {
+		nombre, query, producto, formato string
+		contiene                         string
+	}{
+		{"sustantivo ajeno", "fresas", "Mermelada de fresa Hacendado", "340 g", "sustantivo"},
+		{"falta el sustantivo pedido", "pipas de calabaza", "Calabaza 1,6 Kg aprox.", "1,6 kg", "sustantivo"},
+		{"variante distinta", "arándanos", "Arándanos enteros ultracongelados", "500 g", "variante distinta"},
+		{"formato distinto", "Leche entera 1L", "Leche entera pack 6 x 1 L", "6 x 1 L", "formato distinto"},
+		{"cobertura baja", "Aceite de oliva virgen extra", "Aceite de girasol para freír 1 L", "1 L", "cobertura baja"},
+	}
+	for _, c := range casos {
+		v := Evaluar(c.query, c.producto, c.formato)
+		if v.Aceptado {
+			t.Errorf("%s: %q se ha aceptado, no debería", c.nombre, c.producto)
+		}
+		found := false
+		for _, m := range v.Motivos {
+			if strings.Contains(m, c.contiene) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: ningún motivo contiene %q, motivos: %v", c.nombre, c.contiene, v.Motivos)
+		}
+	}
+
+	bueno := Evaluar("Leche semidesnatada 1L", "Leche semidesnatada Hacendado", "1 L")
+	if !bueno.Aceptado || len(bueno.Motivos) != 0 {
+		t.Errorf("una coincidencia buena no debe traer motivos: %+v", bueno)
+	}
+}
+
+// tokenOf devuelve el primer token de un texto, ya normalizado.
+func tokenOf(s string) string {
+	t := Tokens(s)
+	if len(t) == 0 {
+		return ""
+	}
+	return t[0]
 }

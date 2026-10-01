@@ -56,18 +56,31 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		p.Format = chain.FormatFromName(p.Name)
 	}
 
-	priceText := detail.Find("p.product-price__unit-price").First().Text()
+	priceSel := detail.Find("p.product-price__unit-price").First()
+	priceText := strings.Join(strings.Fields(priceSel.Text()), " ")
 	if f, ok := chain.ParsePrice(priceText); ok {
 		p.Price = f
 		p.UnitPrice = f
 		p.Available = true
+		// En productos vendidos al peso el precio viene como €/kg o €/l. Se
+		// guarda además como precio por medida para que el informe lo muestre y
+		// el total siga siendo interpretable.
+		if m, ok := chain.ParseMeasurePrice(priceText); ok {
+			p.MeasurePrice = m.Value
+			p.MeasureUnit = m.Unit
+			if p.Format == "" {
+				p.Format = "1 " + m.Unit
+			}
+		}
 	}
 	extra := strings.ToLower(detail.Find("p.product-price__extra-price").First().Text())
 	if p.MeasureUnit == "" && strings.Contains(extra, "/ud") {
 		p.MeasureUnit = "ud"
 	}
 
-	if old := detail.Find("[class*='previous'], s, del").First().Text(); old != "" {
+	// Solo cuenta como precio anterior el que Mercadona marca como tal: antes
+	// cualquier <del> o <s> de la ficha servía, y de ahí salían ofertas falsas.
+	if old := detail.Find("[class*='previous-price'], [class*='old-price'], [class*='price-old'], [class*='previous']").First().Text(); old != "" {
 		if f, ok := chain.ParsePrice(old); ok {
 			p.OldPrice = f
 		}

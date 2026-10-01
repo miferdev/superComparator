@@ -15,7 +15,7 @@ func chainReport(cmp core.Comparison, chainID, finalBase string) string {
 	cov := cmp.CoverageOf(chainID)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Compra en %s\n\n", name)
-	fmt.Fprintf(&b, "_Generado el %s_\n\n", cmp.GeneratedAt.Format("02/01/2006 15:04"))
+	b.WriteString(generatedAt(cmp.GeneratedAt))
 	fmt.Fprintf(&b, "Esta cadena tiene **%d de %d** productos de tu lista", cov.Found, cov.Total)
 	if !cov.Complete {
 		fmt.Fprintf(&b, ": no sirve para hacer la compra entera, le faltan %d", cov.Total-cov.Found)

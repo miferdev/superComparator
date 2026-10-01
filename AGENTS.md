@@ -53,7 +53,10 @@ make up                # docker compose up
 
 ## Ejecución
 
-- Docker: **`docker compose up`** (o `docker compose run --rm app`). El
+- Docker: **`docker compose up --build`** (o `docker compose run --rm app`).
+  Sin `--build` se reutiliza la imagen anterior y los informes salen con código
+  viejo; por eso cada informe lleva versión y commit (`internal/version`,
+  inyectados con -ldflags). El
   proceso es un lote: lee la lista, resuelve, comprueba, escribe los informes,
   imprime la comparativa y termina. `compose.yml` monta el repo en `/compras`,
   `./datos` en `/datos` y fija `user: "${UID:-1000}:${GID:-1000}"` para que los
@@ -61,7 +64,9 @@ make up                # docker compose up
 - Sin Docker hace falta Chromium/Chrome en el `PATH`; si no,
   `SUPERCOMPARATOR_BROWSER_BIN=/ruta/a/chrome`. En Docker se usa
   `ROD_BROWSER_BIN=/headless-shell/headless-shell`.
-- Subcomandos: `report` (regenera el informe desde la base), `smoke`
+- Subcomandos: `report` (regenera los informes desde la base), `explain`
+  (enseña los candidatos de cada producto con su veredicto y el motivo del
+  rechazo; escribe `datos/explicacion.md` y no toca la base), `smoke`
   (diagnóstico de una ficha por cadena) y `version`. Sin subcomando hace el
   flujo completo. `check` está obsoleto.
 - Flags: `--lista`, `--cp`, `--db`, `--report`, `--browser-bin`, `--cadenas`,
@@ -121,6 +126,10 @@ match**: el producto queda sin resolver y sus candidatos van a «Revisar», para
 que un total nunca incluya un producto que no es el pedido. `core.Check` revisita
 las URLs vinculadas, marca disponibilidad y guarda historial
 (`core/events.go` define los eventos).
+
+La decisión de qué producto entra en el informe está en
+`core/elegirCandidato`, y lógica compartida con `explain` es
+`core/evaluarCandidatos`: si se cambia una regla hay que tocar ahí, no duplicarla.
 
 Detalles de `match` que conviene no romper: la medida **no** cuenta como prueba
 del nombre (si no, «leche infantil 1 L» encajaría con «leche semidesnatada 1 L»),

@@ -16,7 +16,7 @@ import (
 func Generate(cmp core.Comparison) string {
 	var b strings.Builder
 	b.WriteString("# Comparativa de la compra\n\n")
-	fmt.Fprintf(&b, "_Generado el %s_\n\n", cmp.GeneratedAt.Format("02/01/2006 15:04"))
+	b.WriteString(generatedAt(cmp.GeneratedAt))
 	b.WriteString(recommendation(cmp))
 	b.WriteString("\n## Resumen\n\n")
 	b.WriteString("| Producto | Cant. | Precio más barato | Supermercado | Producto elegido | Enlace |\n")

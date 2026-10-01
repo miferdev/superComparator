@@ -3,8 +3,10 @@ package report
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/miferdev/superComparator/internal/core"
+	"github.com/miferdev/superComparator/internal/version"
 )
 
 // ChainName traduce el identificador de la cadena a su nombre comercial.
@@ -44,6 +46,12 @@ func CheapestLabel(item core.ItemComparison) string {
 		label += " (" + item.Criterion + ")"
 	}
 	return label
+}
+
+// generatedAt es la línea de cabecera de los informes: cuándo se generó y con
+// qué versión del programa.
+func generatedAt(t time.Time) string {
+	return fmt.Sprintf("_Generado el %s · %s_\n\n", t.Format("02/01/2006 15:04"), version.Stamp())
 }
 
 func money(v float64) string { return decimal(v, 2) + " €" }

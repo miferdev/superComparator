@@ -16,9 +16,8 @@ import (
 	"github.com/miferdev/superComparator/internal/match"
 	"github.com/miferdev/superComparator/internal/report"
 	"github.com/miferdev/superComparator/internal/store"
+	"github.com/miferdev/superComparator/internal/version"
 )
-
-const version = "0.2.0"
 
 // defaultChains son las cadenas que se comparan si no se pide ninguna.
 var defaultChains = []string{"mercadona", "ahorramas", "dia"}
@@ -63,7 +62,7 @@ func main() {
 	pf.IntVar(&f.candidates, "candidates", 0, "candidatos por cadena")
 	pf.IntVar(&f.delayMS, "delay-ms", 0, "pausa entre peticiones (ms)")
 
-	root.AddCommand(checkCmd(&f), reportCmd(&f), smokeCmd(&f), versionCmd())
+	root.AddCommand(checkCmd(&f), reportCmd(&f), explainCmd(&f), smokeCmd(&f), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -88,9 +87,24 @@ func run(cfg config.Config) error {
 
 	ctx := context.Background()
 	matches, _ := c.Store().Matches()
-	if needsResolve(matches, items, c.Chains()) {
+	forzar, err := reglasCambiadas(c.Store())
+	if err != nil {
+		return err
+	}
+	if forzar || needsResolve(matches, items, c.Chains()) {
+		if forzar {
+			fmt.Println("Las reglas de coincidencia han cambiado: se resuelve la lista entera otra vez.")
+			// Hay que vaciar lo anterior: si no, la resolución lo daría por
+			// hecho y se mezclarían productos de dos versiones de las reglas.
+			if err := c.Store().ClearMatches(); err != nil {
+				return err
+			}
+		}
 		fmt.Println("Resolviendo productos…")
 		if err := c.Resolve(ctx, items, printEvent); err != nil {
+			return err
+		}
+		if err := c.Store().SetMeta(metaMatchVersion, version.Matching); err != nil {
 			return err
 		}
 	}
@@ -133,6 +147,21 @@ func loggerFor(cfg config.Config) *slog.Logger {
 		return slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+// metaMatchVersion guarda con qué versión de las reglas se resolvió la lista.
+const metaMatchVersion = "match_version"
+
+// reglasCambiadas indica si la base se resolvió con otras reglas de
+// coincidencia. En ese caso los matches guardados ya no son de fiar: sin esto,
+// un producto equivocado de una versión anterior se queda en la base para
+// siempre, porque su puntuación era alta.
+func reglasCambiadas(st *store.Store) (bool, error) {
+	guardada, err := st.Meta(metaMatchVersion)
+	if err != nil {
+		return false, err
+	}
+	return guardada != version.Matching, nil
 }
 
 func needsResolve(matches []store.Match, items []list.Item, chains []string) bool {

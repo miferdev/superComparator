@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -81,6 +82,10 @@ CREATE TABLE IF NOT EXISTS price_history (
 	fetched_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_history_url ON price_history(chain, product_url, fetched_at DESC);
+CREATE TABLE IF NOT EXISTS meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alternatives (
 	item_id       INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
 	chain         TEXT NOT NULL,
@@ -128,6 +133,28 @@ func (s *Store) SyncItems(items []list.Item) (map[string]int64, error) {
 		}
 	}
 	return ids, nil
+}
+
+// Meta guarda datos sueltos sobre el estado de la base, como la versión de las
+// reglas con las que se resolvió la lista por última vez.
+func (s *Store) Meta(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// SetMeta guarda un valor de estado de la base.
+func (s *Store) SetMeta(key, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO meta (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
 }
 
 // Item es una línea de la lista tal como está guardada.
