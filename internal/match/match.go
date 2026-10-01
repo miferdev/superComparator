@@ -16,7 +16,9 @@ import (
 )
 
 // AutoThreshold es la similitud mínima para aceptar un producto sin revisión.
-const AutoThreshold = 0.5
+// Con 0,55 se rechazan los productos que solo coinciden en parte del nombre: por
+// ejemplo, un "kéfir de fresa" para pedir "kéfir natural".
+const AutoThreshold = 0.55
 
 // CoverageThreshold es la fracción mínima (ponderada) de la consulta que debe
 // aparecer en el nombre del candidato para entrar en el ranking.
@@ -233,8 +235,12 @@ func Rank(query string, entries []chain.SitemapEntry, limit int) []Scored {
 
 // Similarity compara la consulta con el nombre y el formato de un producto.
 // Penaliza los packs cuando la lista no los pide y premia la misma cantidad.
+// Similarity puntúa cuánto encaja un producto con lo pedido. La medida no cuenta
+// como prueba del nombre porque ya se puntúa aparte: si contara, "leche infantil
+// de continuación 1 L" encajaría con "leche semidesnatada 1 L" solo por tener el
+// mismo litro, que es justo el error que hay que evitar.
 func Similarity(query, name, format string) float64 {
-	at, bt := Tokens(query), Tokens(name)
+	at, bt := nameTokens(query), nameTokens(name)
 	if len(at) == 0 || len(bt) == 0 {
 		return 0
 	}
@@ -249,11 +255,14 @@ func Similarity(query, name, format string) float64 {
 	if !pok {
 		pm, pok = ParseMeasure(name)
 	}
-	switch {
-	case qok && pok && sameMeasure(qm, pm):
-		score += 0.2
-	case qok && pok:
-		score -= 0.3
+	if qok && pok && !sameMeasure(qm, pm) {
+		// Un formato parecido se penaliza poco; uno muy distinto (un pack de
+		// 13 L para pedir 1 L), mucho: no es el producto que se pidió.
+		if measureRatio(qm, pm) <= 2 {
+			score -= 0.3
+		} else {
+			score -= 0.55
+		}
 	}
 	if !strings.Contains(strings.ToLower(query), "pack") && isPack(format+" "+name) {
 		score -= 0.1
@@ -265,4 +274,46 @@ func Similarity(query, name, format string) float64 {
 		return 1
 	}
 	return score
+}
+
+// nameTokens descarta los tokens que son solo una medida. Si el nombre se queda
+// sin nada útil, se conservan todos.
+func nameTokens(s string) []string {
+	all := Tokens(s)
+	var out []string
+	for _, t := range all {
+		if _, ok := ParseMeasure(t); ok {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return all
+	}
+	return out
+}
+
+// InOrder devuelve las entradas ya ordenadas por quien las ha buscado, sin
+// volver a puntuarlas. Lo usan las cadenas que filtran el catálogo ellas
+// mismas, porque sus nombres no siempre encajan con el criterio de Rank.
+func InOrder(entries []chain.SitemapEntry) []Scored {
+	out := make([]Scored, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, Scored{Entry: e})
+	}
+	return out
+}
+
+// measureRatio indica cuánto mayor es un formato que otro. Si las unidades no
+// son comparables devuelve un valor enorme: kg frente a litros no es el mismo
+// producto.
+func measureRatio(a, b Measure) float64 {
+	if a.Value <= 0 || b.Value <= 0 {
+		return 0
+	}
+	if a.Unit != b.Unit {
+		return math.Inf(1)
+	}
+	alto, bajo := math.Max(a.Value, b.Value), math.Min(a.Value, b.Value)
+	return alto / bajo
 }

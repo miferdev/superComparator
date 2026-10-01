@@ -1,4 +1,5 @@
-// Package report genera el informe markdown de la comparativa.
+// Package report genera los informes markdown: uno por supermercado con su
+// lista de compra y otro final con la opción más barata de cada producto.
 package report
 
 import (
@@ -6,171 +7,79 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/miferdev/superComparator/internal/core"
 )
 
+// Generate construye el informe final: la opción más barata de cada producto
+// con su enlace, los totales por supermercado y los avisos.
 func Generate(cmp core.Comparison) string {
 	var b strings.Builder
-	b.WriteString("# Informe de la compra\n\n")
+	b.WriteString("# Comparativa de la compra\n\n")
 	fmt.Fprintf(&b, "_Generado el %s_\n\n", cmp.GeneratedAt.Format("02/01/2006 15:04"))
-
-	b.WriteString("| Producto | Cant. |")
-	for _, chainID := range cmp.Chains {
-		fmt.Fprintf(&b, " %s |", ChainName(chainID))
+	fmt.Fprintf(&b, "Compra mixta: **%s**", money(cmp.MixedTotal))
+	if cmp.CheapestChain != "" {
+		fmt.Fprintf(&b, " · la más barata es **%s** (%s)", ChainName(cmp.CheapestChain), money(cmp.Totals[cmp.CheapestChain]))
 	}
-	b.WriteString(" Más barato |\n")
-	b.WriteString("| --- | ---: |")
-	for range cmp.Chains {
-		b.WriteString(" ---: |")
-	}
-	b.WriteString(" --- |\n")
+	b.WriteString("\n\n## Resumen\n\n")
+	b.WriteString("| Producto | Cant. | Precio más barato | Supermercado | Producto elegido | Enlace |\n")
+	b.WriteString("| --- | ---: | ---: | --- | --- | --- |\n")
 
 	for _, item := range cmp.Items {
-		fmt.Fprintf(&b, "| %s | %d |", item.Name, item.Quantity)
-		for _, chainID := range cmp.Chains {
-			opt, ok := optionFor(item, chainID)
-			if !ok || opt.Price <= 0 {
-				b.WriteString(" — |")
-				continue
-			}
-			cell := fmt.Sprintf("%s — %s", opt.Product, money(opt.Price))
-			if item.Quantity > 1 {
-				cell += fmt.Sprintf(" (%s)", money(opt.Price*float64(item.Quantity)))
-			}
-			if opt.MeasurePrice > 0 {
-				cell += fmt.Sprintf(" · %s/%s", money(opt.MeasurePrice), opt.MeasureUnit)
-			}
-			if opt.Promo {
-				cell += " · OFERTA"
-				if opt.OldPrice > 0 {
-					cell += fmt.Sprintf(" (antes %s)", money(opt.OldPrice))
-				}
-			}
-			if opt.Stale {
-				cell += " · desactualizado"
-			}
-			fmt.Fprintf(&b, " %s |", cell)
+		opt, ok := optionFor(item, item.Cheapest)
+		if item.Cheapest == "" || !ok {
+			fmt.Fprintf(&b, "| %s | %d | — | — | — | — |\n", cell(item.Name), item.Quantity)
+			continue
 		}
-		if item.Cheapest != "" {
-			fmt.Fprintf(&b, " %s |\n", CheapestLabel(item))
-		} else {
-			b.WriteString(" — |\n")
-		}
+		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s |\n",
+			cell(item.Name),
+			item.Quantity,
+			money(opt.Price),
+			cell(CheapestLabel(item)),
+			cell(opt.Product),
+			link(opt.URL, "ficha"),
+		)
 	}
 
-	b.WriteString("\n## Totales\n\n")
-	b.WriteString("| Cadena | Total |\n| --- | ---: |\n")
+	b.WriteString("\n## Totales por supermercado\n\n")
+	b.WriteString("| Supermercado | Total | Informe |\n| --- | ---: | --- |\n")
 	for _, chainID := range cmp.Chains {
-		fmt.Fprintf(&b, "| %s | %s |\n", ChainName(chainID), money(cmp.Totals[chainID]))
+		fmt.Fprintf(&b, "| %s | %s | %s |\n",
+			ChainName(chainID), money(cmp.Totals[chainID]), link(ChainFile(chainID), "ver su lista"))
 	}
-	fmt.Fprintf(&b, "| Compra mixta | %s |\n", money(cmp.MixedTotal))
-
+	fmt.Fprintf(&b, "| **Compra mixta** | **%s** | |\n", money(cmp.MixedTotal))
 	b.WriteString("\n")
-	if cmp.CheapestChain != "" {
-		fmt.Fprintf(&b, "- Cadena más barata: **%s** (%s)\n", ChainName(cmp.CheapestChain), money(cmp.Totals[cmp.CheapestChain]))
-		if cmp.MaxSaving > 0 {
-			fmt.Fprintf(&b, "- Ahorro máximo comprando todo en la más barata: **%s**\n", money(cmp.MaxSaving))
-		}
+	if cmp.CheapestChain != "" && cmp.MaxSaving > 0 {
+		fmt.Fprintf(&b, "Comprando todo en %s se ahorran **%s** respecto a la más cara.\n",
+			ChainName(cmp.CheapestChain), money(cmp.MaxSaving))
 	}
-	fmt.Fprintf(&b, "- Comprar lo más barato de cada casa: **%s**\n", money(cmp.MixedTotal))
+
+	b.WriteString(changesSection(cmp))
+	b.WriteString(reviewSection(cmp))
 	return b.String()
 }
 
-func Write(path string, cmp core.Comparison) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+// WriteAll escribe el informe de cada cadena y el final, y devuelve las rutas
+// de todos los ficheros generados.
+func WriteAll(path string, cmp core.Comparison) ([]string, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
-	return os.WriteFile(path, []byte(Generate(cmp)), 0o644)
-}
-
-// Console genera la comparativa en texto plano para la terminal: una columna
-// por supermercado con la opción más barata de cada producto pedido.
-func Console(cmp core.Comparison) string {
-	var b strings.Builder
-	w := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
-	fmt.Fprint(w, "Producto\tCant.")
+	var written []string
 	for _, chainID := range cmp.Chains {
-		fmt.Fprintf(w, "\t%s", ChainName(chainID))
-	}
-	fmt.Fprintln(w, "\tMás barato")
-	for _, item := range cmp.Items {
-		fmt.Fprintf(w, "%s\t%d", item.Name, item.Quantity)
-		for _, chainID := range cmp.Chains {
-			opt, ok := optionFor(item, chainID)
-			if !ok || opt.Price <= 0 {
-				fmt.Fprint(w, "\t—")
-				continue
-			}
-			cell := opt.Product
-			if opt.MeasurePrice > 0 {
-				cell += fmt.Sprintf(" (%s · %s/%s)", money(opt.Price), money(opt.MeasurePrice), opt.MeasureUnit)
-			} else {
-				cell += fmt.Sprintf(" (%s)", money(opt.Price))
-			}
-			if item.Quantity > 1 {
-				cell += " · " + money(opt.Price*float64(item.Quantity))
-			}
-			if opt.Promo {
-				cell += " · oferta"
-			}
-			if opt.Stale {
-				cell += " · desactualizado"
-			}
-			fmt.Fprintf(w, "\t%s", cell)
+		chainPath := filepath.Join(dir, ChainFile(chainID))
+		if err := write(chainPath, chainReport(cmp, chainID, filepath.Base(path))); err != nil {
+			return written, err
 		}
-		if item.Cheapest != "" {
-			fmt.Fprintf(w, "\t%s", CheapestLabel(item))
-		} else {
-			fmt.Fprint(w, "\t—")
-		}
-		fmt.Fprintln(w)
+		written = append(written, chainPath)
 	}
-	w.Flush()
-
-	b.WriteString("\n")
-	for _, chainID := range cmp.Chains {
-		fmt.Fprintf(&b, "%-12s %8s\n", ChainName(chainID), money(cmp.Totals[chainID]))
+	if err := write(path, Generate(cmp)); err != nil {
+		return written, err
 	}
-	fmt.Fprintf(&b, "%-12s %8s\n", "Mixta", money(cmp.MixedTotal))
-	if cmp.CheapestChain != "" {
-		fmt.Fprintf(&b, "Más barata: %s (ahorro %s)\n", ChainName(cmp.CheapestChain), money(cmp.MaxSaving))
-	}
-	return b.String()
+	return append(written, path), nil
 }
 
-func optionFor(item core.ItemComparison, chainID string) (core.ChainOption, bool) {
-	for _, opt := range item.Options {
-		if opt.Chain == chainID && opt.Price > 0 {
-			return opt, true
-		}
-	}
-	return core.ChainOption{}, false
-}
-
-func ChainName(id string) string {
-	switch id {
-	case "mercadona":
-		return "Mercadona"
-	case "ahorramas":
-		return "Ahorramas"
-	default:
-		return id
-	}
-}
-
-// CheapestLabel añade el criterio usado (€/kg, €/l o total) al ganador del
-// producto, para que se entienda por qué se eligió.
-func CheapestLabel(item core.ItemComparison) string {
-	label := ChainName(item.Cheapest)
-	if item.Criterion != "" {
-		label += " (" + item.Criterion + ")"
-	}
-	return label
-}
-
-func money(v float64) string {
-	s := fmt.Sprintf("%.2f", v)
-	return strings.Replace(s, ".", ",", 1) + " €"
+func write(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
 }

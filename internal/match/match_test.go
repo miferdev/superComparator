@@ -104,3 +104,66 @@ func TestSinonimos(t *testing.T) {
 		t.Fatalf("no se unificó el sinónimo: %+v", got)
 	}
 }
+
+// TestSimilarityNoAceptaPorLaMedida comprueba que coincidir solo en el
+// formato no convierte un producto distinto en el buscado: fue el caso de la
+// leche infantil de continuación para "leche semidesnatada 1L".
+func TestSimilarityNoAceptaPorLaMedida(t *testing.T) {
+	casos := []struct {
+		nombre, producto, formato string
+		quiere                    bool
+	}{
+		{"Leche semidesnatada 1L", "Leche semidesnatada Hacendado", "1 L", true},
+		{"Leche semidesnatada 1L", "Leche Asturiana 1l semidesnatada", "1 L", true},
+		{"Leche semidesnatada 1L", "Leche infantil de continuación de 6 a 12 meses Nativa", "1 L", false},
+		{"Leche entera 1L", "Leche entera Asturiana 1 L", "1 L", true},
+		{"Pan de molde blanco", "Pan de molde blanco Hacendado", "", true},
+		{"Pan de molde blanco", "Pan de molde sin corteza Alipende 450g", "450 g", true},
+		{"copos de avena suaves", "Copos de avena Brüggen", "", true},
+		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", true},
+		{"Kéfir natural", "Kéfir de fresa y frambuesa Activia 4 x 125 g", "4 x 125 g", false},
+	}
+	for _, c := range casos {
+		got := Similarity(c.nombre, c.producto, c.formato)
+		aceptado := got >= AutoThreshold
+		if aceptado != c.quiere {
+			t.Errorf("Similarity(%q, %q, %q) = %.2f (aceptado=%v), quiero aceptado=%v",
+				c.nombre, c.producto, c.formato, got, aceptado, c.quiere)
+		}
+	}
+}
+
+// TestSimilarityPack rechaza los packs cuando no se han pedido: aceptarlos
+// multiplicaría la cantidad equivocada en el total de la compra.
+func TestSimilarityPack(t *testing.T) {
+	conPack := Similarity("Leche entera 1L", "Leche entera Asturiana pack 6 x 1 L", "6 x 1 L")
+	if conPack >= AutoThreshold {
+		t.Errorf("un pack de 6 unidades no debería encajar con 1 L: %.2f", conPack)
+	}
+	// Si el usuario pide packs, sí.
+	pedido := Similarity("Leche entera pack 6 x 1 L", "Leche entera Asturiana pack 6 x 1 L", "6 x 1 L")
+	if pedido < AutoThreshold {
+		t.Errorf("un pack pedido explícitamente debería encajar, %.2f", pedido)
+	}
+}
+
+// TestSimilarityFormatoDistinto cubre el caso de un pack de 13 L para pedir 1 L.
+func TestSimilarityFormatoDistinto(t *testing.T) {
+	casos := []struct {
+		nombre, producto, formato string
+		quiere                    bool
+	}{
+		{"Leche semidesnatada 1L", "Leche semidesnatada Asturiana pack 6 x 2.2 L", "6 x 2.2 L", false},
+		{"Leche entera 1L", "Leche entera Asturiana 1 L", "1 L", true},
+		{"Leche entera 1L", "Leche entera Asturiana pack 6 x 1 L", "6 x 1 L", false},
+		{"Copos de avena 500 g", "Copos de avena Azucarados 1 kg", "1 kg", true},
+		{"Copos de avena 500 g", "Copos de avena Azucarados 500 g", "500 g", true},
+		{"Pan de molde 400 g", "Pan de molde familiar 550 g", "550 g", true},
+	}
+	for _, c := range casos {
+		got := Similarity(c.nombre, c.producto, c.formato)
+		if (got >= AutoThreshold) != c.quiere {
+			t.Errorf("Similarity(%q, %q, %q) = %.2f, quiero aceptado=%v", c.nombre, c.producto, c.formato, got, c.quiere)
+		}
+	}
+}

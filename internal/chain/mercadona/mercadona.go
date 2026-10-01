@@ -1,6 +1,7 @@
 // Package mercadona implementa el puerto chain sobre las fichas públicas de
-// tienda.mercadona.es usando un navegador headless (rod). Solo se accede a
-// /sitemap.xml y /product/..., como permite su robots.txt.
+// tienda.mercadona.es: el sitemap por HTTP y las fichas con un navegador
+// headless. Solo se accede a /sitemap.xml y /product/..., como permite su
+// robots.txt.
 package mercadona
 
 import (
@@ -9,35 +10,27 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 
 	"github.com/miferdev/superComparator/internal/chain"
+	"github.com/miferdev/superComparator/internal/chain/browser"
 	"github.com/miferdev/superComparator/internal/config"
 )
 
 const (
 	id         = "mercadona"
-	homeURL    = "https://tienda.mercadona.es/"
 	sitemapURL = "https://tienda.mercadona.es/sitemap.xml"
-	userAgent  = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
 type Client struct {
 	cfg  config.Config
 	http *http.Client
-
-	mu          sync.Mutex
-	browser     *rod.Browser
-	launchErr   error
-	userDataDir string
+	br   *browser.Browser
 }
 
 type urlset struct {
@@ -50,7 +43,8 @@ type urlset struct {
 func New(cfg config.Config) *Client {
 	return &Client{
 		cfg:  cfg,
-		http: &http.Client{Timeout: 45 * time.Second},
+		http: chain.NewHTTPClient(45 * time.Second),
+		br:   browser.New(cfg),
 	}
 }
 
@@ -61,7 +55,7 @@ func (c *Client) Sitemap(ctx context.Context) ([]chain.SitemapEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", chain.UserAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -98,11 +92,7 @@ func (c *Client) Sitemap(ctx context.Context) ([]chain.SitemapEntry, error) {
 }
 
 func (c *Client) Fetch(ctx context.Context, url string) (chain.Product, error) {
-	browser, err := c.browserFor(ctx)
-	if err != nil {
-		return chain.Product{}, err
-	}
-	page, err := browser.Context(ctx).Page(proto.TargetCreateTarget{URL: url})
+	page, err := c.br.Page(ctx, url)
 	if err != nil {
 		return chain.Product{}, err
 	}
@@ -149,57 +139,4 @@ func (c *Client) setPostalCodeIfNeeded(page *rod.Page) {
 	time.Sleep(3 * time.Second)
 }
 
-func (c *Client) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.browser != nil {
-		_ = c.browser.Close()
-		c.browser = nil
-	}
-	if c.userDataDir != "" {
-		_ = os.RemoveAll(c.userDataDir)
-		c.userDataDir = ""
-	}
-}
-
-func (c *Client) browserFor(ctx context.Context) (*rod.Browser, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.launchErr != nil {
-		return nil, c.launchErr
-	}
-	if c.browser != nil {
-		return c.browser, nil
-	}
-	userDataDir, err := os.MkdirTemp("", "supercomparator-chrome-")
-	if err != nil {
-		c.launchErr = fmt.Errorf("creando perfil temporal: %w", err)
-		return nil, c.launchErr
-	}
-	l := launcher.New().
-		Headless(true).
-		Leakless(false).
-		Set("no-sandbox").
-		Set("disable-dev-shm-usage").
-		Set("disable-gpu").
-		Set("window-size", "1280,800").
-		Set("user-data-dir", userDataDir)
-	if c.cfg.BrowserBin != "" {
-		l = l.Bin(c.cfg.BrowserBin)
-	}
-	controlURL, err := l.Launch()
-	if err != nil {
-		_ = os.RemoveAll(userDataDir)
-		c.launchErr = fmt.Errorf("lanzando navegador headless: %w", err)
-		return nil, c.launchErr
-	}
-	browser := rod.New().ControlURL(controlURL)
-	if err := browser.Connect(); err != nil {
-		_ = os.RemoveAll(userDataDir)
-		c.launchErr = fmt.Errorf("conectando al navegador: %w", err)
-		return nil, c.launchErr
-	}
-	c.userDataDir = userDataDir
-	c.browser = browser
-	return browser, nil
-}
+func (c *Client) Close() { c.br.Close() }

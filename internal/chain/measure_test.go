@@ -53,3 +53,37 @@ func TestParseMeasurePrice(t *testing.T) {
 		}
 	}
 }
+
+// TestParseMeasurePriceEspacioDuro cubre el formato de DÍA, que separa el
+// precio y el símbolo € con un espacio duro.
+func TestParseMeasurePriceEspacioDuro(t *testing.T) {
+	m, ok := ParseMeasurePrice("(1,24 €/LITRO)")
+	if !ok {
+		t.Fatal("no se ha parseado el precio por unidad")
+	}
+	if m.Value != 1.24 || m.Unit != "l" {
+		t.Errorf("medida = %v %q, want 1.24 l", m.Value, m.Unit)
+	}
+}
+
+func TestNormalizeSpaces(t *testing.T) {
+	if got := NormalizeSpaces("1,24 €/LITRO"); got != "1,24 €/LITRO" {
+		t.Errorf("NormalizeSpaces = %q", got)
+	}
+}
+
+func TestFormatFromName(t *testing.T) {
+	casos := []struct{ in, want string }{
+		{"Leche entera Asturiana pack 6 x 1 L", "6 x 1 L"},
+		{"Pack 3 x 400 g yogures", "3 x 400 g"},
+		{"Leche entera Asturiana 1 L", "1 L"},
+		{"Pan de molde integral 400 g", "400 g"},
+		{"Aceite de oliva 1 L", "1 L"},
+		{"Kéfir natural sabor suave", ""},
+	}
+	for _, c := range casos {
+		if got := FormatFromName(c.in); got != c.want {
+			t.Errorf("FormatFromName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -2,9 +2,9 @@ package core
 
 import "github.com/miferdev/superComparator/internal/chain"
 
-// Event es cualquier aviso tipado que el núcleo envía a la interfaz
-// (la TUI los pinta; el modo CLI los resume). Las funciones que los reciben
-// deben ser seguras para uso concurrente.
+// Event es cualquier aviso tipado que el núcleo envía a la interfaz, que los
+// resume en la consola. Las funciones que los reciben deben ser seguras para
+// uso concurrente.
 type Event interface{ event() }
 
 type RunStarted struct {
@@ -56,14 +56,8 @@ type RunFinished struct {
 	Err      error
 }
 
-type Alternative struct {
-	URL          string
-	Name         string
-	Score        float64
-	Price        float64
-	MeasurePrice float64
-	MeasureUnit  string
-}
+// Alternative es un candidato descartado al resolver un producto.
+type Alternative = chain.Alternative
 
 func (RunStarted) event()      {}
 func (ItemStarted) event()     {}

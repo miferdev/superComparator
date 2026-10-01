@@ -15,6 +15,12 @@ type Measure struct {
 
 var measurePriceRe = regexp.MustCompile(`(?i)(\d+(?:[.,]\d+)?)\s*(?:€|&euro;|eur)\s*/\s*([a-z]+)\b`)
 
+// NormalizeSpaces sustituye los espacios duros que usan algunas tiendas (U+00A0
+// y U+202F) por espacios normales, para que las expresiones regulares los vean.
+func NormalizeSpaces(s string) string {
+	return strings.NewReplacer("\u00a0", " ", "\u202f", " ", "\u2009", " ").Replace(s)
+}
+
 // NormalizeMeasure convierte una cantidad con unidad a su base canónica:
 // gramos a kg y mililitros/centilitros a litros.
 func NormalizeMeasure(value float64, unit string) (Measure, bool) {
@@ -39,7 +45,7 @@ func NormalizeMeasure(value float64, unit string) (Measure, bool) {
 // y lo normaliza a €/kg o €/l. Los precios por unidad suelta (/ud) no son una
 // medida continua y se descartan.
 func ParseMeasurePrice(text string) (Measure, bool) {
-	for _, m := range measurePriceRe.FindAllStringSubmatch(text, -1) {
+	for _, m := range measurePriceRe.FindAllStringSubmatch(NormalizeSpaces(text), -1) {
 		price, err := strconv.ParseFloat(strings.ReplaceAll(m[1], ",", "."), 64)
 		if err != nil || price <= 0 {
 			continue

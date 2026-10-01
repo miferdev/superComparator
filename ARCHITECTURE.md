@@ -1,8 +1,9 @@
 # Arquitectura
 
 SuperComparator es un programa de línea de comandos que compara precios de la
-compra entre Mercadona y Ahorramas y escribe el resultado en un fichero
-markdown. Esta guía explica las piezas y el orden recomendado de lectura.
+compra entre Mercadona, Ahorramas y DÍA, y escribe un informe markdown por
+supermercado más otro final. Esta guía explica las piezas y el orden recomendado
+de lectura.
 
 ## Vista general
 
@@ -12,38 +13,48 @@ internal/
   config/    env + flags          no depende de nadie
   list/      parser de lista.md   puro, sin red ni BD
   match/     normalización/ranking puro, sin red ni BD
-  chain/     interfaz (puerto) Chain + tipos Product/SitemapEntry
+  chain/     interfaz (puerto) Chain + tipos Product/SitemapEntry/Alternative
+    browser/    Chromium headless compartido por las cadenas que lo necesitan
     mercadona/  rod headless (CP 28032, /sitemap.xml y /product)
     ahorramas/  HTTP + JSON-LD (sitemaps y fichas)
-  store/     SQLite (items, matches, price_history)
+    dia/        HTTP + JSON-LD, con Lookup por categoría (su sitemap no lleva nombre)
+    alcampo/    sitemaps por HTTP + rod (WAF; desactivada por defecto)
+  store/     SQLite (items, matches, price_history, alternatives)
   core/      orquestador + eventos; usa chain, match y store
-  report/    informe.md y salida de consola (depende de los tipos de core)
+  report/    informes por cadena, comparativa y consola (depende de los tipos de core)
 ```
 
 Regla de dependencias: `cmd → core → chain|match|store → config`, con `report`
 colgando de `core`. Las flechas van en un solo sentido; no hay ciclos. Los
-adaptadores de cadena solo importan `chain` y `config`.
+adaptadores de cadena solo importan `chain`, `config` y `match` (que es puro: sin
+red ni base de datos).
 
 ## Flujo de datos
 
 1. `list` parsea la tabla markdown y devuelve `[]list.Item`.
-2. `core.Resolve` pide el sitemap a cada `chain.Chain`, puntúa candidatos con
-   `match.Rank`, descarga los mejores y elige por `match.Similarity`
-   (nombre + formato; penaliza packs de tamaño distinto). Guarda el match y el
-   precio en `store` y emite eventos (`ChainResolved`, `ItemNeedsReview`…).
+2. `core.Resolve` pide candidatos a cada `chain.Chain`. Por defecto los saca del
+   sitemap y los puntúa con `match.Rank`; si la cadena implementa `chain.Lookup`
+   (DÍA), es ella quien busca y ordena, y el núcleo se fía. Descarga los mejores
+   y los puntúa con `match.Similarity` sobre el nombre real de la ficha. Entre los
+   que superan `match.AutoThreshold` gana el más barato; por debajo del umbral el
+   producto **no** entra en la comparativa: se guarda como alternativa y el informe
+   lo manda a «Revisar».
 3. `core.Check` revisita solo las URLs vinculadas, detecta cambios de precio y
    descatalogados, y guarda historial.
 4. `core.Comparison` calcula totales por cadena, ganador por producto y compra
-   mixta. `report` lo convierte en markdown (`Write`) o en texto para consola
-   (`Console`).
+   mixta, y añade los productos sin resolver, los cambios de precio recientes y
+   lo que hay que revisar. `report.WriteAll` escribe un markdown por cadena
+   (`report.go`, `chains.go`) más la comparativa (`report.go`), y `Console` lo
+   muestra en texto plano.
 
 ## Flujo de ejecución
 
 El comando por defecto (sin subcomando) hace, en este orden: parsear la lista →
-resolver solo los productos que falten o tengan coincidencia dudosa → comprobar
-precios → escribir el informe → imprimir la comparativa. Los subcomandos
-`report` (regenera el informe desde la base), `smoke` (comprueba una ficha de
-cada cadena) y `version` son auxiliares. No hay interfaz interactiva.
+resolver solo lo que falte (un producto nuevo, una cadena que no lo tenía o una
+coincidencia dudosa) → comprobar precios → escribir los informes → imprimir la
+comparativa. `--cadenas` elige qué cadenas se comparan. Los subcomandos `report`
+(regenera los informes desde la base), `smoke` (comprueba una ficha de cada
+cadena) y `version` son auxiliares. No hay interfaz interactiva.
 
 ## Orden de lectura recomendado
 
@@ -51,10 +62,12 @@ cada cadena) y `version` son auxiliares. No hay interfaz interactiva.
 2. `internal/core/events.go` y `internal/core/core.go` — el contrato del núcleo.
 3. `internal/chain/chain.go` — el puerto que cumplen las cadenas.
 4. `internal/chain/ahorramas/` — adaptador simple (HTTP + JSON-LD), ideal para empezar.
-5. `internal/chain/mercadona/` — adaptador complejo (navegador headless + CP).
-6. `internal/list/` y `internal/match/` — lógica pura y sus tests.
-7. `internal/store/` — esquema SQLite e historial.
-8. `internal/report/` — plantillas de markdown y salida de consola.
+5. `internal/chain/dia/` — adaptador con `Lookup`: el catálogo no se puede
+   resolver con el sitemap y la cadena busca ella misma.
+6. `internal/chain/mercadona/` — adaptador con navegador headless y CP.
+7. `internal/list/` y `internal/match/` — lógica pura y sus tests.
+8. `internal/store/` — esquema SQLite e historial.
+9. `internal/report/` — informes por cadena, comparativa y salida de consola.
 
 ## Reglas del proyecto
 

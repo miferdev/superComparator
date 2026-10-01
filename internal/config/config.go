@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type Config struct {
 	ListaPath   string
 	DBPath      string
 	ReportPath  string
+	Chains      []string
 	Workers     int
 	Delay       time.Duration
 	Candidates  int
@@ -46,7 +48,19 @@ func Load() Config {
 	if c.ListaPath == "" {
 		c.ListaPath = "lista.md"
 	}
+	c.Chains = SplitChains(env("SUPERCOMPARATOR_CADENAS", ""))
 	return c
+}
+
+// SplitChains convierte "mercadona,día" en ["mercadona", "dia"]. Acepta
+// separadores de coma o espacio.
+func SplitChains(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
 }
 
 func (c Config) EnsureDirs() error {

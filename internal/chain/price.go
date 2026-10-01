@@ -41,3 +41,33 @@ func HumanizeSlug(slug string) string {
 	slug = strings.NewReplacer("-", " ", "_", " ", "/", " ").Replace(slug)
 	return strings.TrimSpace(unicodeSpRe.ReplaceAllString(slug, " "))
 }
+
+// JSONText es un dato JSON-LD que puede venir como texto o como número: las
+// tiendas no lo hacen de forma uniforme y ambos son válidos.
+type JSONText string
+
+func (t *JSONText) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "null" {
+		s = ""
+	}
+	*t = JSONText(s)
+	return nil
+}
+
+// ParseJSONNumber convierte el precio de un dato estructurado, que viene en
+// formato máquina ("1.24"), a float64.
+func ParseJSONNumber(s string) (float64, bool) {
+	s = strings.Trim(strings.TrimSpace(s), `"`)
+	if s == "" {
+		return 0, false
+	}
+	if !strings.Contains(s, ".") && strings.Contains(s, ",") {
+		s = strings.ReplaceAll(s, ",", ".")
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f <= 0 {
+		return 0, false
+	}
+	return f, true
+}
