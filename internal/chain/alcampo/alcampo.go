@@ -128,7 +128,8 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 }
 
 // entryFromURL construye la entrada del catálogo a partir de
-// /products/larsа-leche-entera-1-l/51814.
+// /products/larsа-leche-entera-1-l/51814. Category se deja vacía: su sitemap
+// solo trae el slug del producto, nunca la sección a la que pertenece.
 func entryFromURL(rawURL, lastMod string) chain.SitemapEntry {
 	segments := strings.Split(strings.TrimSuffix(rawURL, "/"), "/")
 	e := chain.SitemapEntry{URL: rawURL}

@@ -2,171 +2,96 @@ package main
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/miferdev/superComparator/internal/config"
-	"github.com/miferdev/superComparator/internal/list"
-	"github.com/miferdev/superComparator/internal/match"
 	"github.com/miferdev/superComparator/internal/store"
-	"github.com/miferdev/superComparator/internal/version"
 )
 
-func match_(item string, score float64) store.Match {
-	return store.Match{ItemName: item, Score: score}
-}
-
-func enCadena(item, chain string, score float64) store.Match {
-	m := match_(item, score)
-	m.Chain = chain
-	return m
-}
-
-var dosCadenas = []string{"mercadona", "ahorramas"}
-
-func TestNeedsResolve(t *testing.T) {
-	casos := []struct {
-		nombre  string
-		matches []store.Match
-		items   []list.Item
-		chains  []string
-		want    bool
-	}{
-		{
-			nombre: "lista vacía de matches",
-			items:  []list.Item{{Name: "Leche", Quantity: 1}},
-			chains: dosCadenas,
-			want:   true,
-		},
-		{
-			nombre:  "todo resuelto en todas las cadenas",
-			matches: []store.Match{enCadena("Leche", "mercadona", 0.9), enCadena("Leche", "ahorramas", 0.8), enCadena("Pan", "mercadona", 0.8), enCadena("Pan", "ahorramas", 0.7)},
-			items:   []list.Item{{Name: "Leche", Quantity: 1}, {Name: "Pan", Quantity: 1}},
-			chains:  dosCadenas,
-			want:    false,
-		},
-		{
-			nombre:  "falta la cadena nueva para un producto ya resuelto",
-			matches: []store.Match{enCadena("Leche", "mercadona", 0.9), enCadena("Leche", "ahorramas", 0.8)},
-			items:   []list.Item{{Name: "Leche", Quantity: 1}},
-			chains:  []string{"mercadona", "ahorramas", "dia"},
-			want:    true,
-		},
-		{
-			nombre:  "producto nuevo sin resolver aunque haya muchos matches",
-			matches: []store.Match{enCadena("Leche", "mercadona", 0.9), enCadena("Leche", "ahorramas", 0.8), enCadena("Kéfir", "mercadona", 0.7), enCadena("Kéfir", "ahorramas", 0.7)},
-			items:   []list.Item{{Name: "Leche", Quantity: 1}, {Name: "Yogur", Quantity: 1}},
-			chains:  dosCadenas,
-			want:    true,
-		},
-		{
-			nombre:  "quedan ítems del histórico que ya no están en la lista",
-			matches: []store.Match{enCadena("Leche", "mercadona", 0.9), enCadena("Leche", "ahorramas", 0.9), enCadena("Antiguo", "mercadona", 0.9), enCadena("Antiguo", "ahorramas", 0.9)},
-			items:   []list.Item{{Name: "Leche", Quantity: 1}},
-			chains:  dosCadenas,
-			want:    true,
-		},
-		{
-			nombre:  "coincidencia dudosa",
-			matches: []store.Match{enCadena("Leche", "mercadona", 0.9), enCadena("Leche", "ahorramas", match.AutoThreshold-0.1)},
-			items:   []list.Item{{Name: "Leche", Quantity: 1}},
-			chains:  dosCadenas,
-			want:    true,
-		},
-	}
-	for _, c := range casos {
-		if got := needsResolve(c.matches, c.items, c.chains); got != c.want {
-			t.Errorf("%s: needsResolve = %v, want %v", c.nombre, got, c.want)
-		}
-	}
-}
-
 func TestSelectChains(t *testing.T) {
-	casos := []struct {
-		nombre string
-		cfg    config.Config
-		want   []string
-		err    bool
-	}{
-		{nombre: "por defecto", cfg: config.Config{}, want: []string{"mercadona", "ahorramas", "dia"}},
-		{nombre: "explícita", cfg: config.Config{Chains: []string{"dia", "mercadona"}}, want: []string{"dia", "mercadona"}},
-		{nombre: "con alcampo", cfg: config.Config{Chains: []string{"mercadona", "alcampo"}}, want: []string{"mercadona", "alcampo"}},
-		{nombre: "desconocida", cfg: config.Config{Chains: []string{"carrefour"}}, err: true},
-	}
-	for _, c := range casos {
-		chains, err := selectChains(c.cfg)
-		if c.err {
-			if err == nil {
-				t.Errorf("%s: esperaba error", c.nombre)
-			}
-			closeChains(chains)
-			continue
-		}
-		if err != nil {
-			t.Errorf("%s: %v", c.nombre, err)
-			continue
-		}
-		var got []string
-		for _, ch := range chains {
-			got = append(got, ch.ID())
-		}
-		if strings.Join(got, ",") != strings.Join(c.want, ",") {
-			t.Errorf("%s: cadenas = %v, want %v", c.nombre, got, c.want)
-		}
-		closeChains(chains)
-	}
-}
-
-func TestSelectChainsAlcampoNoVienePorDefecto(t *testing.T) {
-	chains, err := selectChains(config.Config{})
+	todos, err := selectChains(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeChains(chains)
-	for _, ch := range chains {
-		if ch.ID() == "alcampo" {
-			t.Error("Alcampo no debe compararse por defecto: su WAF bloquea las fichas")
+	defer closeChains(todos)
+	if len(todos) != 4 {
+		t.Fatalf("cadenas por defecto = %d, want 4", len(todos))
+	}
+	ids := make([]string, 0, len(todos))
+	for _, ch := range todos {
+		ids = append(ids, ch.ID())
+	}
+	want := "mercadona,ahorramas,dia,alcampo"
+	got := ""
+	for i, id := range ids {
+		if i > 0 {
+			got += ","
 		}
+		got += id
+	}
+	if got != want {
+		t.Errorf("cadenas = %s, want %s", got, want)
 	}
 }
 
-// TestReglasCambiadas cubre el fallo de los informes viejos: si la lista se
-// resolvió con otras reglas, los matches guardados ya no son de fiar y hay que
-// resolverla entera, aunque sus puntuaciones sean buenas.
-func TestReglasCambiadas(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "meta.db"))
+func TestSelectChainsDesconocida(t *testing.T) {
+	chains, err := selectChains([]string{"carrefour"})
+	if err == nil {
+		closeChains(chains)
+		t.Fatal("una cadena desconocida debe dar error")
+	}
+}
+
+// TestSeedCatalogNoPisaLoAjustado: si alguien cambia el ritmo o activa los
+// precios de Alcampo en la base, volver a sembrar no debe deshacerlo.
+func TestSeedCatalogNoPisaLoAjustado(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "seed.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 
-	cambia, err := reglasCambiadas(st)
-	if err != nil {
+	if err := seedCatalog(st); err != nil {
 		t.Fatal(err)
 	}
-	if !cambia {
-		t.Error("una base sin versión guardada debe considerarse antigua")
+	// Ajuste manual: activar los precios de Alcampo y pausar Mercadona.
+	if _, err := st.DB().Exec(`UPDATE chains SET precios_activos = 1, pausa_segundos = 9 WHERE id = 'alcampo'`); err != nil {
+		t.Fatal(err)
 	}
+	if err := seedCatalog(st); err != nil {
+		t.Fatal(err)
+	}
+	ch, ok, err := st.Chain("alcampo")
+	if err != nil || !ok {
+		t.Fatal("alcampo debería seguir en chains")
+	}
+	if !ch.PreciosActivos || ch.PausaSegundos != 9 {
+		t.Errorf("el ajuste se ha perdido: %+v", ch)
+	}
+}
 
-	if err := st.SetMeta(metaMatchVersion, version.Matching); err != nil {
-		t.Fatal(err)
+func TestLoadConfigAplicaFlags(t *testing.T) {
+	f := flags{addr: "0.0.0.0:9000", db: "/tmp/x.db", chains: "mercadona,dia"}
+	cfg := loadConfig(&f)
+	if cfg.Addr != "0.0.0.0:9000" {
+		t.Errorf("addr = %q", cfg.Addr)
 	}
-	cambia, err = reglasCambiadas(st)
-	if err != nil {
-		t.Fatal(err)
+	if cfg.DBPath != "/tmp/x.db" {
+		t.Errorf("db = %q", cfg.DBPath)
 	}
-	if cambia {
-		t.Error("con la versión actual guardada no hay que re-resolver")
+	if len(cfg.Chains) != 2 || cfg.Chains[1] != "dia" {
+		t.Errorf("cadenas = %v", cfg.Chains)
 	}
+}
 
-	if err := st.SetMeta(metaMatchVersion, "0.0.1"); err != nil {
-		t.Fatal(err)
+func TestConfigPorDefecto(t *testing.T) {
+	t.Setenv("SUPERCOMPARATOR_ADDR", "")
+	t.Setenv("SUPERCOMPARATOR_DB", "")
+	cfg := config.Load()
+	if cfg.Addr != config.DefaultAddr {
+		t.Errorf("addr = %q, want %q", cfg.Addr, config.DefaultAddr)
 	}
-	cambia, err = reglasCambiadas(st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cambia {
-		t.Error("con una versión distinta hay que re-resolver")
+	if cfg.DBPath == "" {
+		t.Error("la base de datos debería tener ruta por defecto")
 	}
 }

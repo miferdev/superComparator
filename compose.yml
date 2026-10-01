@@ -5,12 +5,17 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     init: true
     shm_size: "1gb"
+    # Dentro del contenedor hay que escuchar en 0.0.0.0 para que el puerto
+    # publicado llegue. Lo que limita la web a este ordenador es el mapeo de
+    # abajo (127.0.0.1), no el bind.
     environment:
-      TERM: ${TERM:-xterm-256color}
+      SUPERCOMPARATOR_ADDR: "0.0.0.0:8080"
       SUPERCOMPARATOR_CP: "28032"
-      SUPERCOMPARATOR_LISTA: /compras/lista.md
-      SUPERCOMPARATOR_DB: /datos/precios.db
-      SUPERCOMPARATOR_REPORT: /datos/informe.md
+      SUPERCOMPARATOR_DB: /datos/catalogo.db
+    # Solo en este ordenador. Para abrirla desde el móvil o otro equipo de casa,
+    # cambia a "8080:8080" (ojo: cualquiera de tu wifi podría entrar).
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
       - .:/compras:ro
       - ./datos:/datos

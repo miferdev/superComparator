@@ -10,13 +10,13 @@ import (
 
 var (
 	// Version es la versión del programa (0.3.0-dev por defecto).
-	Version = "0.3.2"
+	Version = "0.4.0"
 	// Commit es el hash corto del commit; "dev" si se compiló sin ldflags.
 	Commit = "dev"
 	// Matching es la versión de las reglas de coincidencia. Cuando cambian las
 	// reglas, los matches guardados dejan de ser válidos, así que se vuelve a
 	// resolver la lista entera en lugar de fiarse de ellos.
-	Matching = "0.3.2"
+	Matching = "0.4.0"
 )
 
 // Stamp es la firma que se escribe en los informes.

@@ -2,7 +2,8 @@
 // (dia.es): sitemap plano de fichas y fichas server-rendered con JSON-LD.
 //
 // Su sitemap no incluye el nombre del producto, solo la ruta de categoría
-// (/categoria/subcategoria/p/id), así que el adaptador agrupa las fichas por
+// (/categoria/subcategoria/p/id), de la que sale la categoría legible de cada
+// entrada. Como no trae el nombre, el adaptador agrupa las fichas por
 // categoría, elige las que encajan con la consulta y las reparte de forma
 // espaciada. El nombre real llega de la ficha, y si la coincidencia final no
 // supera el umbral del núcleo la coincidencia se marca para revisión manual.
@@ -14,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -49,7 +52,7 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		Available: true,
 		FetchedAt: time.Now(),
 		SKU:       productID(url),
-		Category:  categoryFromURL(url),
+		Category:  categoryNameFromURL(url),
 	}
 
 	doc.Find(`script[type="application/ld+json"]`).EachWithBreak(func(_ int, s *goquery.Selection) bool {
@@ -131,6 +134,32 @@ func categoryFromURL(rawURL string) string {
 		cat = append(cat, s)
 	}
 	return strings.Join(cat, "/")
+}
+
+// categoryNameFromURL devuelve la categoría de la ficha como nombre legible,
+// con los niveles separados por " / ": la ruta
+// /huevos-leche-y-mantequilla/leche/p/16065 se lee "Huevos leche y
+// mantequilla / Leche". Cada nivel se humaniza por separado, porque
+// HumanizeSlug convierte también las barras en espacios y perdería la
+// jerarquía.
+func categoryNameFromURL(rawURL string) string {
+	segments := strings.Split(categoryFromURL(rawURL), "/")
+	names := make([]string, 0, len(segments))
+	for _, s := range segments {
+		if s != "" {
+			names = append(names, capitalize(chain.HumanizeSlug(s)))
+		}
+	}
+	return strings.Join(names, " / ")
+}
+
+// capitalize sube la inicial de un nombre de categoría sin tocar el resto.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 // pathSegments devuelve los segmentos de la ruta de una URL de DÍA.

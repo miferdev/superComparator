@@ -1,198 +1,294 @@
 # SuperComparator
 
-Comparador de precios de la compra entre **Mercadona**, **Ahorramas** y **DÍA** a
-partir de una lista en markdown. Resuelve cada producto, compara por unidad y por
-peso (€/kg, €/L) y escribe un informe markdown por supermercado y otro final con la
-opción más barata de cada producto y su enlace directo.
+Catálogo de precios de **Mercadona, Ahorramas, DÍA y Alcampo**. El programa
+indexa los catálogos de las cuatro tiendas en una base SQLite y sirve una **API
+JSON** para buscar productos, ver su precio por unidad y por peso (€/kg, €/L) y
+comparar entre tiendas. Dentro de poco habrá una SPA de Angular encima de esa
+misma API (fase 2); hoy la web es una página mínima que la lista.
 
-## Tu lista (`lista.md`)
+> Esto **ya no** es un comparador de listas de la compra. No existe `lista.md`, ni
+> se escriben informes markdown, ni se resuelve una compra automáticamente: el
+> usuario navega el catálogo y compara él. Los ficheros `datos/*.md` que veas en
+> tu máquina son restos de la versión anterior y no los genera nada.
 
-Una tabla markdown de dos columnas: producto y cantidad. Si la cantidad está
-vacía o no tiene número, se asume **1 unidad**.
+## Estado actual
 
-```md
-| Producto         | Cantidad |
-| ---------------- | -------- |
-| Leche entera 1L  | 3        |
-| Pan de molde     |          |
-| Champú           | 1        |
-```
+Indexado con `crawl index` contra las cuatro tiendas (106.226 productos, base de
+82 MB):
 
-Deja `lista.md` en la raíz del repositorio (junto a `compose.yml`). Tienes un
-ejemplo en `lista.ejemplo.md`. El fichero personal se ignora en git.
+| Cadena    | Productos | Precios activos | Nota |
+|-----------|----------:|-----------------|------|
+| Mercadona | 4.320     | sí              | El nombre sale del slug, pero **la medida no** (aparece al visitar la ficha) |
+| Ahorramas | 4.536     | sí              | Nombre y medida salen del slug (3.039 con medida) |
+| DÍA       | 7.755     | sí              | Su sitemap **no trae el nombre**, solo la categoría; se marca `ficha_pendiente` para que la cola le ponga el nombre real |
+| Alcampo   | 89.615    | **no**          | Su WAF responde 403 a las fichas, así que entra el catálogo pero no el precio (el nombre y la medida sí salen del slug) |
 
-## Uso con Docker
+Dos cosas que conviene no confundir:
+
+- **«Precios activos»** es el interruptor por cadena (`precios_activos` en la
+  tabla `chains`): dice si la cola de precios podrá visitar esas fichas. Alcampo
+  lo tiene apagado a propósito, no porque su catálogo falte.
+- **Precio guardado** hoy es `0` en las cuatro cadenas. Todavía no hay nadie que
+  descargue fichas: falta el worker de la cola de precios (ver
+  [qué no existe todavía](#qué-no-existe-todavía)). El catálogo y la búsqueda ya
+  funcionan; los precios todavía no.
+
+La búsqueda con FTS5 responde en **4-26 ms** sobre las 106.000 filas. El
+tokenizador le quita las tildes, así que escribir «fresas» (plural, sin tilde)
+encuentra «fresas bandeja»; además se indexa `search_name`, el nombre sin
+stopwords ni plurales, para que «fresa» encuentre lo mismo.
+
+## Puesta en marcha (Docker)
 
 ```sh
 docker compose up --build
 ```
 
-`--build` es importante: sin él Docker reutiliza la imagen anterior y los
-informes pueden salir con código viejo (por eso cada informe lleva su versión y
-commit en la cabecera). `make up` ya lo incluye. El programa lee `lista.md` de la raíz del
-repositorio, resuelve cada producto en las tres cadenas, comprueba los precios y
-escribe los informes en `./datos/`. No hay interfaz interactiva: termina solo.
+Y abre <http://127.0.0.1:8080>. El contenedor arranca la web del catálogo y deja
+la API en marcha. `--build` importa: sin él se reutiliza la imagen anterior y
+puedes estar viendo una versión vieja. `make up` ya lo incluye.
 
-Los informes quedan en tu repositorio y son tuyos (el contenedor escribe con tu
-usuario), así que puedes leerlos, editarlos o borrarlos sin `sudo`:
+El puerto está publicado solo en `127.0.0.1`, así que la web no sale del
+ordenador. Para abrirla desde el móvil tendrías que cambiar el mapeo a
+`8080:8080` en `compose.yml` (con el aviso de que cualquiera de tu wifi podría
+entrar).
 
-| Fichero                 | Contenido                                                             |
-| ----------------------- | --------------------------------------------------------------------- |
-| `datos/informe.md`      | Comparativa final: opción más barata, supermercado y enlace           |
-| `datos/mercadona.md`    | Tu lista con el producto encontrado y el precio en Mercadona          |
-| `datos/ahorramas.md`    | Ídem en Ahorramas                                                      |
-| `datos/dia.md`          | Ídem en DÍA                                                            |
-| `datos/alcampo.md`      | Ídem en Alcampo (solo si lo activas, ver abajo)                       |
+## Llenar el catálogo
 
-Para otra lista:
+La web no indexa sola: el indexado es un comando aparte, y es la parte rápida
+(son sitemaps, no fichas).
 
 ```sh
-docker compose run --rm app --lista /compras/otra-lista.md
+docker compose run --rm app crawl index
 ```
 
-El historial de precios queda en `./datos/precios.db`, así que las siguientes
-ejecuciones solo vuelven a consultar los productos ya resueltos. Eso también
-sirve para cron:
+Lee el sitemap de cada cadena, guarda nombre, medida, categoría y enlace de cada
+producto en `datos/catalogo.db`, encola en `price_queue` lo que aún no tiene
+precio y termina con un resumen:
+
+```
+Cadena        En catálogo   Con precio   Sin precio
+ahorramas          4536           0         4536
+alcampo           89615           0        89615
+dia                7755           0         7755
+mercadona          4320           0         4320
+```
+
+Para probar sin llenar 106.000 filas:
 
 ```sh
-docker compose run --rm app
+docker compose run --rm app crawl index --max 500
 ```
 
-## Uso local (sin Docker)
+Se puede repetir tantas veces como quieras: el `upsert` es idempotente sobre
+`(cadena, url)`, así que no duplica nada **ni pisa los precios** que ya tengas.
 
-Requiere Go 1.27 y un Chromium/Chrome instalado. Si no está en el `PATH`:
+## Comandos
+
+| Comando | Qué hace |
+|---------|----------|
+| `supercomparator` o `supercomparator serve` | Levanta la web del catálogo (es lo que hace por defecto) |
+| `supercomparator crawl index [--max N]` | Indexa los catálogos desde los sitemaps (`--max` acota para probar) |
+| `supercomparator smoke --url cadena=url` | Descarga una ficha de cada cadena: diagnóstico de un scraper roto |
+| `supercomparator version` | Versión con la que se compiló |
+
+Con Docker, `app crawl index --max 500` es el equivalente de
+`docker compose run --rm app crawl index --max 500`.
+
+Diagnóstico de una ficha concreta (por ejemplo, para ver si Mercadona sigue
+devolviendo el HTML que esperamos):
 
 ```sh
-SUPERCOMPARATOR_BROWSER_BIN=/ruta/a/chrome go run ./cmd/supercomparator
-go run ./cmd/supercomparator --lista otra-lista.md
+docker compose run --rm app smoke \
+  --url mercadona=https://tienda.mercadona.es/product/3723/fresas-bandeja
 ```
 
-## Configuración (variables de entorno)
+## API
 
-| Variable                     | Por defecto            | Descripción                          |
-| ---------------------------- | ---------------------- | ------------------------------------ |
-| `SUPERCOMPARATOR_CP`         | `28032`                | Código postal para Mercadona         |
-| `SUPERCOMPARATOR_CADENAS`    | `mercadona,ahorramas,dia` | Cadenas a comparar                 |
-| `SUPERCOMPARATOR_LISTA`      | `lista.md`             | Ruta de la lista de la compra        |
-| `SUPERCOMPARATOR_DB`         | `datos/precios.db`     | Base SQLite                          |
-| `SUPERCOMPARATOR_REPORT`     | `datos/informe.md`     | Informe markdown                     |
-| `SUPERCOMPARATOR_WORKERS`    | `3`                    | Peticiones en paralelo               |
-| `SUPERCOMPARATOR_DELAY_MS`   | `300`                  | Pausa entre peticiones               |
-| `SUPERCOMPARATOR_CANDIDATES` | `6`                    | Candidatos que se descargan por cadena |
-| `SUPERCOMPARATOR_RANK_POOL`  | `15`                   | Candidatos puntuados en el sitemap   |
-| `SUPERCOMPARATOR_MIN_SCORE`  | `0`                    | Puntuación mínima para descargar un candidato |
-| `SUPERCOMPARATOR_MAX_PRICE_AGE_DAYS` | `0`            | Caducidad del precio en días (0 = sin límite) |
-| `SUPERCOMPARATOR_LOG`        | (vacío)                | Fichero de log (p. ej. `datos/app.log`); registra cada match con su similitud |
-| `SUPERCOMPARATOR_BROWSER_BIN`| (auto)                 | Binario de Chromium                  |
+Todo cuelga de `http://127.0.0.1:8080`. Devuelve JSON y no habla nunca con una
+tienda: solo lee y escribe en la base.
 
-Para comparar solo algunas cadenas:
+| Ruta | Qué devuelve |
+|------|--------------|
+| `GET /api/estado` | Versión, las cuatro cadenas con su recuento y el último trabajo |
+| `GET /api/cadenas` | Las cuatro tiendas: total, con precio, sin precio, fase, pausada, precios activos |
+| `GET /api/catalogo?q=&cadena=&conPrecio=&orden=&offset=&limite=` | Búsqueda paginada |
+| `GET /api/producto?cadena=&url=` | Un producto por cadena y URL |
+| `GET /api/version` | Versión |
+| `GET /` | Página HTML mínima que lista la API (la SPA llega en la fase 2) |
+
+Parámetros de `/api/catalogo`: `q` (texto), `cadena` (`mercadona`, `ahorramas`,
+`dia`, `alcampo`), `conPrecio` (`1`), `orden` (`relevancia` —por defecto—,
+`precio_asc`, `precio_desc`, `nombre`, `medida_asc`), `offset` y `limite`
+(por defecto 50, tope 200).
 
 ```sh
-docker compose run --rm app --cadenas mercadona,dia
+# Cómo va el catálogo entero
+curl -s http://127.0.0.1:8080/api/cadenas
+
+# Buscar "fresas" solo en Mercadona
+curl -s 'http://127.0.0.1:8080/api/catalogo?q=fresas&cadena=mercadona&limite=2'
+
+# Lo mismo, ordenando por precio y quedándote solo con lo que tiene precio
+curl -s 'http://127.0.0.1:8080/api/catalogo?q=fresas&conPrecio=1&orden=precio_asc'
+
+# Un producto concreto (la URL hay que codificarla)
+curl -s --get http://127.0.0.1:8080/api/producto \
+  --data-urlencode 'cadena=mercadona' \
+  --data-urlencode 'url=https://tienda.mercadona.es/product/3723/fresas-bandeja'
 ```
 
-## Ver por qué se eligió cada producto
+`GET /api/catalogo` devuelve `{productos, total, hayMas}`. Cada producto trae
+`precio`, `precioBase` (`unidad` o `kg`: así lo publica la tienda),
+`precioMedida` (por kg o l, que es lo comparable), `medidaValor`,
+`medidaUnidad`, `url` (enlace a la ficha), `tienePrecio`, `precioViejo` y
+`frescuraHoras`:
 
-Cuando un producto no aparece o te sale una marca rara, `explain` enseña los
-candidatos que se han mirado en cada cadena, su puntuación y el motivo de cada
-rechazo:
+```json
+{
+  "id": 2281,
+  "cadena": "mercadona",
+  "nombreCadena": "Mercadona",
+  "url": "https://tienda.mercadona.es/product/3723/fresas-bandeja",
+  "nombre": "fresas bandeja",
+  "sku": "3723",
+  "formato": "",
+  "medidaValor": 0,
+  "medidaUnidad": "",
+  "categoria": "",
+  "precio": 0,
+  "precioBase": "",
+  "precioMedida": 0,
+  "disponible": true,
+  "precioComprobado": "0001-01-01T00:00:00Z",
+  "nombreFuente": "slug",
+  "tienePrecio": false,
+  "precioViejo": false,
+  "frescuraHoras": 0
+}
+```
+
+Ese `precio: 0` es honesto, no un fallo: el catálogo está indexado pero la ficha
+todavía no se ha visitado. Cuando lo esté, vendrán `precio`, `precioMedida` y
+`precioComprobado` con la fecha; `precioViejo` se pone a `true` cuando el precio
+pasa de `precioMaxHoras` (24 h por defecto) y es la señal de que hay que
+recomprobarlo.
+
+## Configuración
+
+Todo se ajusta por variables de entorno; las flags las sobreescriben.
+
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `SUPERCOMPARATOR_ADDR` | `127.0.0.1:8080` | Dirección donde escucha la web (en Docker, `0.0.0.0:8080`) |
+| `SUPERCOMPARATOR_DB` | `datos/catalogo.db` | Ruta de la base SQLite |
+| `SUPERCOMPARATOR_CADENAS` | (todas) | Cadenas a usar, separadas por comas: `mercadona,ahorramas,dia,alcampo` |
+| `SUPERCOMPARATOR_CP` | `28032` | Código postal que se fija en Mercadona |
+| `SUPERCOMPARATOR_BROWSER_BIN` | (auto) | Binario de Chromium para Mercadona y Alcampo; si no, se lee `ROD_BROWSER_BIN` |
+| `SUPERCOMPARATOR_TIMEOUT_S` | `40` | Tiempo máximo de espera por petición, en segundos |
+| `SUPERCOMPARATOR_LOG` | (vacío) | Fichero de log; si se deja vacío los logs se descartan |
+
+Flags (válidas en todos los subcomandos): `--addr`, `--db`, `--browser-bin`,
+`--cadenas`, `--log`. Además, `crawl index` acepta `--max N` y `smoke` acepta
+`--url cadena=url`.
+
+Sin Docker hace falta Go 1.27 y un Chromium/Chrome en el `PATH` (si no,
+`SUPERCOMPARATOR_BROWSER_BIN=/ruta/a/chrome`):
 
 ```sh
-docker compose run --rm app explain
-docker compose run --rm app explain fresas calabaza
+make serve                 # o: go run ./cmd/supercomparator serve
+make index                 # o: go run ./cmd/supercomparator crawl index
 ```
 
-Escribe `datos/explicacion.md` y lo muestra en la terminal. No guarda nada en la
-base de datos ni toca los informes.
+## Las cuatro cadenas
 
-Ejemplo:
+| Cadena | Cómo lee el catálogo | Cómo lee la ficha | Notas |
+|--------|----------------------|-------------------|-------|
+| Mercadona | `/sitemap.xml` por HTTP | Navegador headless (`/product/...`) | Fija el CP 28032 una vez por sesión. El slug trae el nombre pero **no** la medida |
+| Ahorramas | `sitemap_index.xml` + sitemaps de producto por HTTP | HTTP, JSON-LD | Nombre y medida salen del slug |
+| DÍA | `/sitemap.xml` por HTTP | HTTP, JSON-LD (`/p/{id}`) | Su sitemap solo da la **categoría** |
+| Alcampo | `/sitemaps/*` por HTTP | Navegador headless (`/products/...`) | Su WAF responde 403 a las fichas |
 
-```
-pipas de calabaza
-  Mercadona
-    1,00 1,55 €  **elegido**                    Pipas calabaza tostadas Hacendado aguasal
-    0,40 1,55 €  descartado: el sustantivo …    Pan de molde semillas y pipas de calabaza
-  DÍA
-    0,23 3,18 €  descartado: el sustantivo …    Calabaza 1.6 Kg aprox.
-```
+**DÍA.** El sitemap publica rutas como
+`/aceites-salsas-y-especias/aceites/p/100`: no hay nombre de producto, solo la
+sección. Sus 7.755 filas nacen con `crawl_state = ficha_pendiente` y
+`name_source = categoria`, y es la cola de precios la que tiene que visitarlas
+para escribir el nombre real que publica la ficha. Hasta entonces, lo que se
+busca en DÍA son categorías («leche», «vino tinto»), no productos concretos.
 
-## Los informes
+**Alcampo.** Su catálogo se lee muy bien (89.615 productos), pero las fichas están
+detrás de un WAF que responde 403 a los clientes automatizados, así que no sale
+ningún precio. De ahí que venga con `precios_activos = 0`. **No se intenta
+saltarse ese WAF.**
 
-**`datos/<cadena>.md`** copia tu lista tal cual y añade el producto encontrado,
-su precio, el precio por kilo o litro, si está en oferta y el enlace a la ficha,
-con el total de esa cadena al final.
+## Qué no existe todavía
 
-**`datos/informe.md`** es la comparativa. Arriba dice **cómo comprar la lista
-entera**: solo cuentan las cadenas que tienen **todos** los productos, así que una
-cadena con un total parcial (porque le falte algo) nunca sale como la más barata.
-Si ninguna tiene la lista completa, te lo dice y te propone la compra mixta. La
-tabla de totales muestra cuántos productos cubre cada una (`3 de 3`, `1 de 3
-_(parcial)_`) y en cuántas tiendas habría que entrar para la mixta.
+Para no prometer nada que no esté en el repo:
 
-Debajo, una fila por producto con el precio más barato, el supermercado, el
-nombre del producto elegido y el enlace. Añade secciones solo si hacen falta:
+- **La SPA de Angular.** Hoy `GET /` devuelve una página HTML mínima que lista la
+  API. La API está lista; la web no.
+- **La cola de precios.** Es lo que rellena los precios: falta el worker que
+  consume `price_queue`. Sí están escritos el estado en SQLite y las operaciones
+  de `store` (`EnqueuePrices`, `NextQueued`, `FailQueue`, `MarkQueueDone`), así
+  que cuando se escriba no habrá que rediseñar nada. Como no hay quien consuma la
+  cola, hoy ningún producto tiene precio y `price_history` sigue vacía.
+- **La comparación «en otras tiendas».** No hay ninguna vista que agrupe el mismo
+  producto entre cadenas: la comparación la hace la persona, producto a producto,
+  con `precioMedida` a la vista.
+- **«Mi lista».** La tabla `list_items` existe y está vacía, pero no hay
+  endpoints ni nada que la use: sin añadir productos, sin subtotales ni total.
+- Tampoco hay: notificaciones por SSE, recomprobación de un precio viejo al
+  abrirlo, ni consulta del histórico de cambios por la API (`store.Changes` existe
+  en el código, pero ningún endpoint lo llama).
 
-- **Cambios de precio**: lo que ha variado desde las ejecuciones anteriores.
-- **Sin comprar**: productos que no están en ninguna de las cadenas comparadas, que
-  es lo que impide cerrar la lista del todo.
-- **Revisar**: productos que ninguna cadena resolvió con confianza, con enlaces a
-  los candidatos más parecidos para que decidas tú. El programa es conservador a
-  propósito, y estas son las reglas que aplica (ver `explain` para verlas sobre
-  tus productos):
-  - si el sustantivo del candidato no es el tuyo, o el tuyo no aparece, es otro
-    producto que lleva lo tuyo dentro («fresas» no es «mermelada de fresa»);
-  - las palabras derivadas cuentan como la misma: «congelada» y
-    «ultracongelada», «tomate» y «tomates»;
-  - congelado, deshidratado, entero, desnatado, natural, integral y light son
-    variantes distintas: si no las pides, no se aceptan;
-  - un pack o un formato muy distinto se rechaza, para no multiplicar mal el
-    total;
-  - de entre los que sí encajan gana el más barato por precio absoluto, que es lo
-    que pagas por cada unidad de la lista. Un producto no entra en los
-  totales mientras sea dudoso, para no falsear el sumatorio.
+## Scraping responsable
 
-En consola se imprime la misma comparativa en texto plano.
+- **Solo rutas permitidas por el `robots.txt` de cada cadena**: sus sitemaps y las
+  fichas de producto. Nunca sus APIs internas ni sus buscadores. Concreto:
+  - Mercadona: `/sitemap.xml` y `/product/...`. **Nunca `/api`.**
+  - Ahorramas: sitemaps y fichas. **Nunca `/buscador`, `/Search-ShowAjax` ni
+    `/Product-Variation`.**
+  - DÍA: `/sitemap.xml` y `/p/{id}`. **Nunca `*/search?*`** (su robots lo prohíbe
+    y sus páginas de categoría devuelven 404).
+  - Alcampo: `/sitemaps/*` y `/products/*`.
+- **User-Agent honesto** en las peticiones HTTP simples:
+  `supercomparator/0.1 (+https://github.com/miferdev/superComparator)`. Nunca se
+  imita el de un navegador para colarse. (Excepción conocida y documentada: el
+  adaptador de Ahorramas manda un UA de navegador; si algún día se arregla, que
+  sea con el UA honesto y comprobando que sus fichas siguen viniendo.)
+- **Ritmo bajo y por cadena.** Cada tienda tiene su pausa y su concurrencia
+  configuradas en la tabla `chains` (Mercadona 2 s y 1 a la vez; Ahorramas y DÍA
+  1,5 s y 2; Alcampo 3 s y 1), y un fallo encadenado pausa esa cadena sola,
+  mientras las demás siguen.
+- **No se salta el WAF de Alcampo.** Si su web deja pasar las fichas, se
+  activa; mientras tanto, solo su catálogo.
+- Proyecto personal y educativo. Las webs cambian y el scraper tendrá que
+  adaptarse; si una tienda cambia sus sitemaps, se toca su adaptador, no se
+  fuerza la ruta.
 
 ## Desarrollo
 
 ```sh
 make test              # tests unitarios
-make test-integration  # tests con red (opcional)
-make build
+make test-integration  # tests con red (build tag integration; no corren en CI)
+make build             # bin/  ->  bin/supercomparator
+make serve             # la web del catálogo en local
+make index             # indexa los catálogos
+make up                # docker compose up --build
 ```
 
-El diseño y el orden de lectura del código están en [ARCHITECTURE.md](ARCHITECTURE.md).
+Antes de commitear, lo mismo que CI: `gofmt` limpio, `go vet ./...` y
+`go test ./...` en verde.
 
-## Las cadenas
+## Documentación
 
-| Cadena     | Cómo lee los datos                                   | Notas |
-| ---------- | ---------------------------------------------------- | ----- |
-| Mercadona  | sitemap por HTTP, fichas con navegador headless       | Fija el CP 28032 |
-| Ahorramas  | sitemap y fichas por HTTP (JSON-LD)                   | |
-| DÍA        | sitemap y fichas por HTTP (JSON-LD)                   | Ver limitaciones |
-| Alcampo    | sitemaps por HTTP, fichas con navegador headless      | Desactivada por defecto |
-
-**DÍA.** Su sitemap solo trae la ruta de la categoría
-(`/huevos-leche-y-mantequilla/leche/p/16065`), sin el nombre del producto. Para
-compensarlo, el adaptador elige las categorías que mejor encajan con tu línea,
-muestrea unas pocas fichas de cada una y compara con el nombre real que publica
-la ficha. Es una búsqueda por muestreo: puede no encontrar productos que sí tiene
-(categorías sin cobertura) y todo lo que no encaje con confianza va a la sección
-**Revisar** en vez de darse por bueno.
-
-**Alcampo.** Su catálogo se lee bien (100 000 productos por sitemap), pero las
-fichas están detrás de un WAF que responde 403 a los clientes automatizados, así
-que no se obtienen precios. Por eso **no se compara por defecto**; si algún día la
-web lo permite, se activa con `--cadenas mercadona,ahorramas,dia,alcampo`.
-
-## Scraping responsable
-
-Solo se acceden a rutas permitidas por el `robots.txt` de cada cadena:
-`sitemaps` y fichas de producto. Nunca a sus endpoints de búsqueda o API interna.
-El `User-Agent` identifica al proyecto de forma honesta
-(`supercomparator/0.1 (+https://github.com/miferdev/superComparator)`) en las
-peticiones HTTP. Concurrencia máxima 3 y pausas entre peticiones. Proyecto
-personal y educativo: las webs pueden cambiar y el scraper deberá adaptarse.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — mapa de paquetes, regla de dependencias,
+  decisiones (SQLite, FTS5, la cola en base) y estado de cada fase.
+- [docs/modelo-datos.md](docs/modelo-datos.md) — diagrama entidad-relación y
+  diccionario de datos de `datos/catalogo.db`.
+- [docs/diagrama-flujo.md](docs/diagrama-flujo.md) — arranque, indexado, cola de
+  precios y recorrido en la web.
+- [AGENTS.md](AGENTS.md) — convenciones del repo para quien trabaje en él.
 
 ## Licencia
 

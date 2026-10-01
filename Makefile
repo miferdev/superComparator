@@ -1,10 +1,10 @@
 BIN := supercomparator
-VERSION := 0.3.0-dev
+VERSION := 0.4.0
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/miferdev/superComparator/internal/version.Version=$(VERSION) \
            -X github.com/miferdev/superComparator/internal/version.Commit=$(COMMIT)
 
-.PHONY: build test test-integration vet fmt run check report explain docker-build up clean
+.PHONY: build test test-integration vet fmt serve run index docker-build up clean
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o bin/$(BIN) ./cmd/supercomparator
@@ -21,17 +21,16 @@ vet:
 fmt:
 	gofmt -w .
 
-run:
-	go run ./cmd/supercomparator
+# serve es lo que hace el comando por defecto: levanta la web del catálogo.
+serve:
+	go run ./cmd/supercomparator serve
 
-check:
-	go run ./cmd/supercomparator check
+run: serve
 
-report:
-	go run ./cmd/supercomparator report
-
-explain:
-	go run ./cmd/supercomparator explain
+# index lee los sitemaps y guarda el catálogo. Los precios los rellena la cola
+# de precios, que todavía no está (fase 2).
+index:
+	go run ./cmd/supercomparator crawl index
 
 docker-build:
 	docker compose build

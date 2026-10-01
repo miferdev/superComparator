@@ -35,7 +35,7 @@ func TestParseProduct(t *testing.T) {
 	if p.SKU != "16065" {
 		t.Errorf("SKU = %q, want 16065", p.SKU)
 	}
-	if p.Category != "huevos-leche-y-mantequilla/leche" {
+	if p.Category != "Huevos leche y mantequilla / Leche" {
 		t.Errorf("categoría = %q", p.Category)
 	}
 }
@@ -55,6 +55,27 @@ func TestCategoryFromURL(t *testing.T) {
 	for _, c := range casos {
 		if got := categoryFromURL(c.url); got != c.want {
 			t.Errorf("categoryFromURL(%q) = %q, want %q", c.url, got, c.want)
+		}
+	}
+}
+
+// TestCategoryNameFromURL comprueba la categoría legible completa. Se
+// humaniza cada nivel por separado y se unen con " / ": es la única parte de la
+// URL de DÍA que describe la sección, así que perder el orden de los niveles
+// (que es el orden de la URL) haría que dos secciones distintas se leyeran
+// igual. Dentro de un nivel no se añade puntuación —"Huevos leche y
+// mantequilla" y no "Huevos, leche y mantequilla"— porque el slug solo
+// transmite el texto y las comas habría que inventarlas.
+func TestCategoryNameFromURL(t *testing.T) {
+	casos := []struct{ url, want string }{
+		{"https://www.dia.es/huevos-leche-y-mantequilla/leche/p/16065", "Huevos leche y mantequilla / Leche"},
+		{"https://www.dia.es/limpieza-y-hogar/insecticidas/p/272250", "Limpieza y hogar / Insecticidas"},
+		{"https://www.dia.es/p/42", ""},
+	}
+	for _, c := range casos {
+		got := categoryNameFromURL(c.url)
+		if got != c.want {
+			t.Errorf("categoryNameFromURL(%q) = %q, want %q", c.url, got, c.want)
 		}
 	}
 }

@@ -79,6 +79,9 @@ func (c *Client) Sitemap(ctx context.Context) ([]chain.SitemapEntry, error) {
 	entries := make([]chain.SitemapEntry, 0, len(set.URLs))
 	for _, u := range set.URLs {
 		slug := strings.TrimSuffix(path.Base(u.Loc), ".html")
+		// Category se deja vacía: el sitemap de productos no dice en qué sección
+		// está cada ficha y el slug es la descripción del producto, no su
+		// categoría.
 		e := chain.SitemapEntry{
 			URL:  u.Loc,
 			Name: chain.HumanizeSlug(slug),

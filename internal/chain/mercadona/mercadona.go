@@ -79,6 +79,9 @@ func (c *Client) Sitemap(ctx context.Context) ([]chain.SitemapEntry, error) {
 		}
 		slug := path.Base(u.Loc)
 		parts := strings.Split(strings.TrimSuffix(u.Loc, "/"), "/")
+		// Category se deja vacía: el slug solo describe el producto
+		// ("leche-semidesnatada-hacendado-brick"), no su sección, y adivinar
+		// una categoría a partir de él daría resultados falsos.
 		e := chain.SitemapEntry{URL: u.Loc, Name: chain.HumanizeSlug(slug)}
 		if len(parts) >= 2 {
 			e.SKU = parts[len(parts)-2]

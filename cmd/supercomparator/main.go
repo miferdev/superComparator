@@ -1,4 +1,5 @@
-// Comando supercomparator: procesa lista.md y escribe el informe markdown.
+// Comando supercomparator: indexa los catálogos de las tiendas y sirve la web
+// con los precios comparados.
 package main
 
 import (
@@ -7,139 +8,94 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/miferdev/superComparator/internal/catalog"
+	"github.com/miferdev/superComparator/internal/chain"
+	"github.com/miferdev/superComparator/internal/chain/ahorramas"
+	"github.com/miferdev/superComparator/internal/chain/alcampo"
+	"github.com/miferdev/superComparator/internal/chain/dia"
+	"github.com/miferdev/superComparator/internal/chain/mercadona"
 	"github.com/miferdev/superComparator/internal/config"
-	"github.com/miferdev/superComparator/internal/core"
-	"github.com/miferdev/superComparator/internal/list"
-	"github.com/miferdev/superComparator/internal/match"
-	"github.com/miferdev/superComparator/internal/report"
 	"github.com/miferdev/superComparator/internal/store"
-	"github.com/miferdev/superComparator/internal/version"
 )
 
-// defaultChains son las cadenas que se comparan si no se pide ninguna.
-var defaultChains = []string{"mercadona", "ahorramas", "dia"}
-
 type flags struct {
-	cp         string
-	lista      string
+	addr       string
 	db         string
-	reportPath string
 	browserBin string
-	workers    int
-	candidates int
-	delayMS    int
 	chains     string
-	mercadonaU string
-	ahorramasU string
-	diaU       string
-	alcampoU   string
+	logPath    string
+}
+
+// catalogChains son las cuatro tiendas del catálogo, con su ritmo de descarga
+// de precios. Alcampo viene con los precios apagados porque su WAF responde 403
+// a las fichas: su catálogo sí entra, el precio no.
+var catalogChains = []store.Chain{
+	{ID: "mercadona", Nombre: "Mercadona", SitemapURL: "https://tienda.mercadona.es/sitemap.xml",
+		PreciosActivos: true, PausaSegundos: 2, Concurrencia: 1, PrecioMaxHoras: 24},
+	{ID: "ahorramas", Nombre: "Ahorramas", SitemapURL: "https://www.ahorramas.com/sitemap_index.xml",
+		PreciosActivos: true, PausaSegundos: 1.5, Concurrencia: 2, PrecioMaxHoras: 24},
+	{ID: "dia", Nombre: "DÍA", SitemapURL: "https://www.dia.es/sitemap.xml",
+		PreciosActivos: true, PausaSegundos: 1.5, Concurrencia: 2, PrecioMaxHoras: 24},
+	{ID: "alcampo", Nombre: "Alcampo", SitemapURL: "https://www.compraonline.alcampo.es/sitemaps/sitemap_index.xml",
+		PreciosActivos: false, PausaSegundos: 3, Concurrencia: 1, PrecioMaxHoras: 24},
 }
 
 func main() {
 	var f flags
 	root := &cobra.Command{
 		Use:   "supercomparator",
-		Short: "Compara precios de la compra entre Mercadona, Ahorramas y DÍA",
-		Long: "Procesa la lista de la compra (lista.md), resuelve cada producto en las " +
-			"cadenas configuradas y escribe un informe markdown por supermercado y otro " +
-			"con la opción más barata de cada producto.",
+		Short: "Catálogo de precios de Mercadona, Ahorramas, DÍA y Alcampo",
+		Long: "Lee los catálogos de las tiendas, guarda nombre, medida y precio de cada " +
+			"producto en una base de datos y sirve una web para buscar y comparar.",
 		SilenceUsage: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return run(loadConfig(&f))
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runServe(loadConfig(&f))
 		},
 	}
 	pf := root.PersistentFlags()
-	pf.StringVar(&f.cp, "cp", "", "código postal (por defecto 28032)")
-	pf.StringVar(&f.lista, "lista", "", "ruta de lista.md (por defecto lista.md)")
+	pf.StringVar(&f.addr, "addr", "", "dirección donde escuchar (por defecto 127.0.0.1:8080)")
 	pf.StringVar(&f.db, "db", "", "ruta de la base SQLite")
-	pf.StringVar(&f.reportPath, "report", "", "ruta del informe markdown")
 	pf.StringVar(&f.browserBin, "browser-bin", "", "binario de Chromium para Mercadona y Alcampo")
-	pf.StringVar(&f.chains, "cadenas", "", "cadenas a comparar, separadas por comas (por defecto mercadona,ahorramas,dia)")
-	pf.IntVar(&f.workers, "workers", 0, "peticiones en paralelo")
-	pf.IntVar(&f.candidates, "candidates", 0, "candidatos por cadena")
-	pf.IntVar(&f.delayMS, "delay-ms", 0, "pausa entre peticiones (ms)")
+	pf.StringVar(&f.chains, "cadenas", "", "cadenas a usar, separadas por comas")
+	pf.StringVar(&f.logPath, "log", "", "fichero de log; si no, los logs se descartan")
 
-	root.AddCommand(checkCmd(&f), reportCmd(&f), explainCmd(&f), smokeCmd(&f), versionCmd())
+	root.AddCommand(serveCmd(&f), crawlCmd(&f), smokeCmd(&f), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-// run es el flujo por defecto: resolver lo que falte, comprobar precios y
-// escribir el informe markdown.
-func run(cfg config.Config) error {
-	if cfg.ListaPath == "" {
-		cfg.ListaPath = "lista.md"
+func loadConfig(f *flags) config.Config {
+	cfg := config.Load()
+	if f.addr != "" {
+		cfg.Addr = f.addr
 	}
-	items, err := list.ParseFile(cfg.ListaPath)
-	if err != nil {
-		return err
+	if f.db != "" {
+		cfg.DBPath = f.db
 	}
-	c, cleanup, err := build(cfg)
-	if err != nil {
-		return err
+	if f.browserBin != "" {
+		cfg.BrowserBin = f.browserBin
 	}
-	defer cleanup()
-
-	ctx := context.Background()
-	matches, _ := c.Store().Matches()
-	forzar, err := reglasCambiadas(c.Store())
-	if err != nil {
-		return err
+	if f.logPath != "" {
+		cfg.LogPath = f.logPath
 	}
-	if forzar || needsResolve(matches, items, c.Chains()) {
-		if forzar {
-			fmt.Println("Las reglas de coincidencia han cambiado: se resuelve la lista entera otra vez.")
-			// Hay que vaciar lo anterior: si no, la resolución lo daría por
-			// hecho y se mezclarían productos de dos versiones de las reglas.
-			if err := c.Store().ClearMatches(); err != nil {
-				return err
-			}
-		}
-		fmt.Println("Resolviendo productos…")
-		if err := c.Resolve(ctx, items, printEvent); err != nil {
-			return err
-		}
-		if err := c.Store().SetMeta(metaMatchVersion, version.Matching); err != nil {
-			return err
-		}
+	if f.chains != "" {
+		cfg.Chains = config.SplitChains(f.chains)
 	}
-	fmt.Println("Comprobando precios…")
-	if err := c.Check(ctx, printEvent); err != nil {
-		return err
-	}
-	cmp, err := c.Comparison(ctx)
-	if err != nil {
-		return err
-	}
-	written, err := report.WriteAll(cfg.ReportPath, cmp)
-	if err != nil {
-		return err
-	}
-	fmt.Println()
-	fmt.Print(report.Console(cmp))
-	printFiles(written)
-	return nil
-}
-
-// printFiles informa de los informes escritos. WriteAll deja el comparativo
-// el último, así que se distingue de los informes por cadena por la posición.
-func printFiles(written []string) {
-	if len(written) == 0 {
-		return
-	}
-	for _, path := range written[:len(written)-1] {
-		fmt.Println("Informe de cadena:", path)
-	}
-	fmt.Println("Comparativa:", written[len(written)-1])
+	return cfg
 }
 
 func loggerFor(cfg config.Config) *slog.Logger {
 	if cfg.LogPath == "" {
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.LogPath), 0o755); err != nil {
 		return slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -149,56 +105,88 @@ func loggerFor(cfg config.Config) *slog.Logger {
 	return slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
-// metaMatchVersion guarda con qué versión de las reglas se resolvió la lista.
-const metaMatchVersion = "match_version"
+// selectChains monta los adaptadores de las cadenas pedidas. Si no se pide
+// ninguna, monta las cuatro del catálogo.
+func selectChains(pedidas []string) ([]chain.Chain, error) {
+	cfg := config.Config{BrowserBin: os.Getenv("SUPERCOMPARATOR_BROWSER_BIN")}
+	if len(pedidas) == 0 {
+		pedidas = []string{"mercadona", "ahorramas", "dia", "alcampo"}
+	}
+	disponibles := map[string]func() chain.Chain{
+		"mercadona": func() chain.Chain { return mercadona.New(cfg) },
+		"ahorramas": func() chain.Chain { return ahorramas.New() },
+		"dia":       func() chain.Chain { return dia.New() },
+		"alcampo":   func() chain.Chain { return alcampo.New(cfg) },
+	}
+	var out []chain.Chain
+	for _, name := range pedidas {
+		fabrica, ok := disponibles[name]
+		if !ok {
+			closeChains(out)
+			return nil, fmt.Errorf("cadena desconocida: %s (hay: %s)", name, strings.Join(cadenasConocidas(), ", "))
+		}
+		out = append(out, fabrica())
+	}
+	return out, nil
+}
 
-// reglasCambiadas indica si la base se resolvió con otras reglas de
-// coincidencia. En ese caso los matches guardados ya no son de fiar: sin esto,
-// un producto equivocado de una versión anterior se queda en la base para
-// siempre, porque su puntuación era alta.
-func reglasCambiadas(st *store.Store) (bool, error) {
-	guardada, err := st.Meta(metaMatchVersion)
+func cadenasConocidas() []string {
+	return []string{"mercadona", "ahorramas", "dia", "alcampo"}
+}
+
+func closeChains(chains []chain.Chain) {
+	for _, ch := range chains {
+		if c, ok := ch.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+}
+
+// seedCatalog deja la configuración de las cadenas en la base. Solo rellena lo
+// que esté vacío, así que lo que se ajuste a mano sobrevive.
+func seedCatalog(st *store.Store) error {
+	for _, ch := range catalogChains {
+		if err := st.SeedChains([]store.Chain{ch}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runServe es el comando por defecto: levanta la web del catálogo.
+func runServe(cfg config.Config) error {
+	if err := cfg.EnsureDirs(); err != nil {
+		return err
+	}
+	st, err := store.Open(cfg.DBPath)
 	if err != nil {
-		return false, err
+		return err
 	}
-	return guardada != version.Matching, nil
+	defer st.Close()
+	if err := seedCatalog(st); err != nil {
+		return err
+	}
+	log := loggerFor(cfg)
+	cat := catalog.New(st, log)
+	if _, err := cat.Chains(context.Background()); err != nil {
+		return err
+	}
+	return newServer(cat, st, log, cfg).ListenAndServe(context.Background())
 }
 
-func needsResolve(matches []store.Match, items []list.Item, chains []string) bool {
-	cobertos := make(map[string]map[string]bool, len(items))
-	historicos := make(map[string]bool)
-	for _, m := range matches {
-		if m.Score < match.AutoThreshold {
-			return true
-		}
-		if cobertos[m.ItemName] == nil {
-			cobertos[m.ItemName] = make(map[string]bool, len(chains))
-		}
-		cobertos[m.ItemName][m.Chain] = true
-		historicos[m.ItemName] = true
+// serveCmd es explícito aunque `serve` ya es lo que hace el comando por defecto.
+func serveCmd(f *flags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "serve",
+		Short: "Levanta la web del catálogo (lo hace el comando por defecto)",
+		RunE:  func(_ *cobra.Command, _ []string) error { return runServe(loadConfig(f)) },
 	}
-	for _, it := range items {
-		if len(cobertos[it.Name]) < len(chains) {
-			return true
-		}
-		delete(historicos, it.Name)
-	}
-	return len(historicos) > 0
 }
 
-func printEvent(e core.Event) {
-	switch ev := e.(type) {
-	case core.ItemStarted:
-		fmt.Printf("[%d/%d] %s\n", ev.Index, ev.Total, ev.Item)
-	case core.ChainResolved:
-		fmt.Printf("  %s → %s (%.2f €)\n", report.ChainName(ev.Chain), ev.Product.Name, ev.Product.Price)
-	case core.ItemNeedsReview:
-		fmt.Printf("  ¡revisar! %s: confianza baja\n", ev.Item)
-	case core.ItemFailed:
-		fmt.Printf("  %s: %s\n", report.ChainName(ev.Chain), ev.Err)
-	case core.PriceChanged:
-		fmt.Printf("  %s: %.2f € → %.2f €\n", report.ChainName(ev.Chain), ev.Old, ev.New)
-	case core.ProductDelisted:
-		fmt.Printf("  descatalogado en %s: %s\n", report.ChainName(ev.Chain), ev.Item)
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Muestra la versión",
+		Run:   func(_ *cobra.Command, _ []string) { fmt.Println(versionStamp()) },
 	}
 }

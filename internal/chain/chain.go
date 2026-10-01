@@ -22,11 +22,16 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
+// SitemapEntry es un producto tal y como aparece en el sitemap de una cadena,
+// antes de descargar su ficha. Category lleva la sección legible cuando el
+// sitemap la trae en la URL (DÍA) y va vacía cuando no la trae (Mercadona,
+// Ahorramas, Alcampo): en ese caso se deduce de la ficha, nunca del slug.
 type SitemapEntry struct {
-	URL     string
-	Name    string
-	SKU     string
-	LastMod time.Time
+	URL      string
+	Name     string
+	SKU      string
+	Category string
+	LastMod  time.Time
 }
 
 type Product struct {

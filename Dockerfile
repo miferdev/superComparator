@@ -19,10 +19,9 @@ RUN apt-get update \
 COPY --from=build /out/supercomparator /usr/local/bin/supercomparator
 
 ENV ROD_BROWSER_BIN=/headless-shell/headless-shell \
+    SUPERCOMPARATOR_ADDR=0.0.0.0:8080 \
     SUPERCOMPARATOR_CP=28032 \
-    SUPERCOMPARATOR_LISTA=/compras/lista.md \
-    SUPERCOMPARATOR_DB=/datos/precios.db \
-    SUPERCOMPARATOR_REPORT=/datos/informe.md
+    SUPERCOMPARATOR_DB=/datos/catalogo.db
 
-WORKDIR /compras
+WORKDIR /datos
 ENTRYPOINT ["supercomparator"]

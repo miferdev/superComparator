@@ -82,7 +82,12 @@ func (c *Client) Sitemap(ctx context.Context) ([]chain.SitemapEntry, error) {
 		}
 		cat := categoryFromURL(u.Loc)
 		sub := path.Base(cat)
-		e := chain.SitemapEntry{URL: u.Loc, Name: chain.HumanizeSlug(sub), SKU: productID(u.Loc)}
+		e := chain.SitemapEntry{
+			URL:      u.Loc,
+			Name:     chain.HumanizeSlug(sub),
+			SKU:      productID(u.Loc),
+			Category: categoryNameFromURL(u.Loc),
+		}
 		entries = append(entries, e)
 		c.byCategory[cat] = append(c.byCategory[cat], e)
 	}

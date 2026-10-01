@@ -5,11 +5,13 @@
 *.test
 *.out
 
-# Datos locales (SQLite, informes)
+# Datos locales (base SQLite del catálogo)
 /datos/
 *.db
+*.db-wal
+*.db-shm
 
-# Lista personal del usuario
+# Ficheros personales del usuario
 /lista.md
 
 # Entorno y editores

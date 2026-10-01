@@ -2,9 +2,16 @@ package store
 
 import "database/sql"
 
+// querier es lo que necesita ensureColumn: ejecutar sentencias tanto sobre la
+// base como dentro de una migración.
+type querier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // ensureColumn añade una columna si no existe. Permite migrar bases creadas
 // con esquemas anteriores sin un sistema de versiones completo.
-func ensureColumn(db *sql.DB, table, column, ddl string) error {
+func ensureColumn(db querier, table, column, ddl string) error {
 	rows, err := db.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return err
