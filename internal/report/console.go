@@ -56,12 +56,35 @@ func Console(cmp core.Comparison) string {
 	w.Flush()
 
 	b.WriteString("\n")
-	for _, chainID := range cmp.Chains {
-		fmt.Fprintf(&b, "%-12s %8s\n", ChainName(chainID), money(cmp.Totals[chainID]))
+	for _, cov := range cmp.Coverage {
+		marca := ""
+		if !cov.Complete {
+			marca = "  (parcial, no cubre la lista)"
+		}
+		fmt.Fprintf(&b, "%-12s %5d/%d  %8s%s\n", ChainName(cov.Chain), cov.Found, cov.Total, money(cmp.Totals[cov.Chain]), marca)
 	}
-	fmt.Fprintf(&b, "%-12s %8s\n", "Mixta", money(cmp.MixedTotal))
-	if cmp.CheapestChain != "" {
-		fmt.Fprintf(&b, "Más barata: %s (ahorro %s)\n", ChainName(cmp.CheapestChain), money(cmp.MaxSaving))
+	if cmp.MixedComplete() {
+		fmt.Fprintf(&b, "%-12s %5d/%d  %8s  (%d tienda%s)\n", "Mixta",
+			len(cmp.Items)-len(cmp.Missing), len(cmp.Items), money(cmp.MixedTotal), cmp.MixedStores, plural(cmp.MixedStores))
+	}
+	b.WriteString("\n")
+	switch {
+	case cmp.CheapestChain != "" && cmp.MixedComplete() && cmp.MixedTotal < cmp.Totals[cmp.CheapestChain]:
+		fmt.Fprintf(&b, "Lista completa: compra mixta (%s) o %s en una sola tienda (%s)\n",
+			money(cmp.MixedTotal), ChainName(cmp.CheapestChain), money(cmp.Totals[cmp.CheapestChain]))
+	case cmp.CheapestChain != "":
+		fmt.Fprintf(&b, "Lista completa en una sola tienda: %s (%s)", ChainName(cmp.CheapestChain), money(cmp.Totals[cmp.CheapestChain]))
+		if cmp.MaxSaving > 0 {
+			fmt.Fprintf(&b, ", ahorro %s", money(cmp.MaxSaving))
+		}
+		b.WriteString("\n")
+	case cmp.MixedComplete():
+		fmt.Fprintf(&b, "Ninguna cadena tiene la lista completa; la mixta cuesta %s\n", money(cmp.MixedTotal))
+	default:
+		b.WriteString("No se puede comprar la lista completa: hay productos sin ninguna cadena\n")
+	}
+	if n := len(cmp.Missing); n > 0 {
+		fmt.Fprintf(&b, "Sin comprar: %s\n", strings.Join(cmp.Missing, ", "))
 	}
 	if n := len(cmp.Review); n > 0 {
 		fmt.Fprintf(&b, "Revisar: %d coincidencia(s) dudosa(s), mira la sección «Revisar» del informe\n", n)

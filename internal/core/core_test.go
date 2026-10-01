@@ -196,3 +196,142 @@ func TestDelisted(t *testing.T) {
 		t.Fatalf("sin evento ProductDelisted: %+v", col.events)
 	}
 }
+
+// cadenaConID es un fakeChain con identificador propio, para poder montar
+// comparativas con varias cadenas.
+type cadenaConID struct {
+	*fakeChain
+	id string
+}
+
+func (f cadenaConID) ID() string { return f.id }
+
+// nuevoCoreConCadenas monta un núcleo con las cadenas dadas y una base nueva.
+func nuevoCoreConCadenas(t *testing.T, ids ...string) *Core {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	chains := make([]chain.Chain, 0, len(ids))
+	for _, id := range ids {
+		chains = append(chains, cadenaConID{&fakeChain{products: map[string]chain.Product{}}, id})
+	}
+	return New(config.Config{}, chains, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// guardar registra un producto como match con precio para una lista.
+func guardar(t *testing.T, c *Core, items []list.Item, precios map[string]map[string]float64) {
+	t.Helper()
+	ids, err := c.store.SyncItems(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for nombre, porCadena := range precios {
+		for chainID, precio := range porCadena {
+			p := chain.Product{
+				Chain: chainID, Name: nombre, URL: "https://x/" + chainID + "/" + nombre,
+				Price: precio, Available: true, FetchedAt: time.Now(),
+			}
+			if err := c.store.SetMatch(ids[nombre], chainID, p, 0.9); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.store.InsertPrice(chainID, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// TestComparisonCadenaIncompletaNoGana cubre el caso que motivó el cambio: DÍA
+// tiene 1,29 € solo del pan, pero como no tiene la leche no puede decirse que
+// sea la más barata, porque con ella no harías la compra entera.
+func TestComparisonCadenaIncompletaNoGana(t *testing.T) {
+	items := []list.Item{{Name: "Leche 1L", Quantity: 1}, {Name: "Pan de molde", Quantity: 1}}
+	c := nuevoCoreConCadenas(t, "mercadona", "dia")
+	guardar(t, c, items, map[string]map[string]float64{
+		"Leche 1L":     {"mercadona": 10.00},
+		"Pan de molde": {"mercadona": 5.00, "dia": 1.29},
+	})
+
+	cmp, err := c.Comparison(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dia := cmp.CoverageOf("dia")
+	if dia.Complete {
+		t.Error("DÍA con 1 de 2 productos no puede estar completa")
+	}
+	if dia.Found != 1 || dia.Total != 2 {
+		t.Errorf("cobertura de DÍA = %d de %d, want 1 de 2", dia.Found, dia.Total)
+	}
+	if len(dia.Missing) != 1 || dia.Missing[0] != "Leche 1L" {
+		t.Errorf("faltantes = %v, want [Leche 1L]", dia.Missing)
+	}
+	mercadona := cmp.CoverageOf("mercadona")
+	if !mercadona.Complete {
+		t.Error("Mercadona tiene los dos productos y debería estar completa")
+	}
+	if cmp.CheapestChain != "mercadona" {
+		t.Errorf("CheapestChain = %q, want mercadona (DÍA no cubre la lista)", cmp.CheapestChain)
+	}
+	if cmp.Totals["dia"] != 1.29 {
+		t.Errorf("total parcial de DÍA = %v, want 1.29", cmp.Totals["dia"])
+	}
+	if !cmp.MixedComplete() {
+		t.Error("la compra mixta sí cubre la lista: cada producto está en alguna cadena")
+	}
+}
+
+// TestComparisonNingunaCadenaCompleta: si nadie tiene la lista entera, no se
+// elige ninguna como más barata.
+func TestComparisonNingunaCadenaCompleta(t *testing.T) {
+	items := []list.Item{{Name: "Leche 1L", Quantity: 1}, {Name: "Pan de molde", Quantity: 1}}
+	c := nuevoCoreConCadenas(t, "mercadona", "dia")
+	guardar(t, c, items, map[string]map[string]float64{
+		"Leche 1L":     {"mercadona": 10.00},
+		"Pan de molde": {"dia": 1.29},
+	})
+
+	cmp, err := c.Comparison(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmp.CheapestChain != "" {
+		t.Errorf("CheapestChain = %q, debe quedar vacío si nadie cubre la lista", cmp.CheapestChain)
+	}
+	if cmp.MaxSaving != 0 {
+		t.Errorf("MaxSaving = %v, want 0 sin cadenas completas", cmp.MaxSaving)
+	}
+	if cmp.CoverageOf("mercadona").Found != 1 || cmp.CoverageOf("dia").Found != 1 {
+		t.Error("cada cadena debería tener 1 de 2")
+	}
+}
+
+// TestComparisonProductoEnNingunaCadena: un producto que no está en ninguna
+// cadena deja la compra mixta incompleta y se avisa.
+func TestComparisonProductoEnNingunaCadena(t *testing.T) {
+	items := []list.Item{{Name: "Leche 1L", Quantity: 1}, {Name: "Kéfir", Quantity: 1}}
+	c := nuevoCoreConCadenas(t, "mercadona")
+	guardar(t, c, items, map[string]map[string]float64{
+		"Leche 1L": {"mercadona": 2.00},
+	})
+
+	cmp, err := c.Comparison(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmp.MixedComplete() {
+		t.Error("con un producto sin ninguna cadena la compra mixta no está completa")
+	}
+	if len(cmp.Missing) != 1 || cmp.Missing[0] != "Kéfir" {
+		t.Errorf("Missing = %v, want [Kéfir]", cmp.Missing)
+	}
+	if cmp.CoverageOf("mercadona").Complete {
+		t.Error("con el kéfir sin resolver Mercadona no cubre la lista")
+	}
+	if cmp.CheapestChain != "" {
+		t.Errorf("CheapestChain = %q, want vacío", cmp.CheapestChain)
+	}
+}

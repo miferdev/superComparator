@@ -45,16 +45,52 @@ type ReviewItem struct {
 	Alternatives []chain.Alternative
 }
 
+// ChainCoverage resume cuánto de la lista cubre una cadena. Una cadena que no
+// tiene todos los productos no sirve para hacer la compra entera, así que su
+// total no es comparable con el de las demás y no puede ganar el título de más
+// barata.
+type ChainCoverage struct {
+	Chain    string
+	Found    int
+	Total    int
+	Missing  []string
+	Complete bool
+}
+
 type Comparison struct {
-	Items         []ItemComparison
-	Chains        []string
-	Totals        map[string]float64
+	Items  []ItemComparison
+	Chains []string
+	// Coverage dice, por cadena, cuántos productos de la lista tiene.
+	Coverage []ChainCoverage
+	// Totals es la suma de los productos encontrados en cada cadena: si la
+	// cadena no cubre la lista, es un total parcial.
+	Totals map[string]float64
+	// MixedTotal es la compra compuesta por el producto más barato en cada
+	// cadena. MixedStores dice en cuántas tiendas habría que entrar.
 	MixedTotal    float64
+	MixedStores   int
+	Missing       []string
 	CheapestChain string
 	MaxSaving     float64
 	GeneratedAt   time.Time
 	Review        []ReviewItem
 	Changes       []store.Change
+}
+
+// CoverageOf devuelve la cobertura de una cadena concreta: cuántos productos
+// de la lista tiene y cuáles le faltan.
+func (c *Comparison) CoverageOf(chainID string) ChainCoverage {
+	for _, cov := range c.Coverage {
+		if cov.Chain == chainID {
+			return cov
+		}
+	}
+	return ChainCoverage{Chain: chainID}
+}
+
+// MixedComplete indica si la compra mixta cubre la lista entera.
+func (c *Comparison) MixedComplete() bool {
+	return len(c.Missing) == 0 && len(c.Items) > 0
 }
 
 // Comparison calcula el total de la compra en cada cadena y la mejor compra
@@ -96,6 +132,7 @@ func (c *Core) Comparison(_ context.Context) (Comparison, error) {
 	if err := c.addUnresolved(&cmp); err != nil {
 		return Comparison{}, err
 	}
+	tiendas := make(map[string]bool, len(c.order))
 	for i := range cmp.Items {
 		ic := &cmp.Items[i]
 		for _, opt := range ic.Options {
@@ -112,26 +149,36 @@ func (c *Core) Comparison(_ context.Context) (Comparison, error) {
 			ic.Cheapest = ic.Options[k].Chain
 			ic.CheapestPrice = ic.Options[k].Price
 			cmp.MixedTotal += ic.Options[k].Price * float64(ic.Quantity)
+			tiendas[ic.Cheapest] = true
 			if next, ok := runnerUpPrice(comps, k); ok {
 				ic.Save = (next - ic.Options[k].Price) * float64(ic.Quantity)
 			}
+		} else {
+			// Ninguna cadena lo tiene con precio: el producto no se puede
+			// comprar, y la compra mixta no cubre la lista.
+			cmp.Missing = append(cmp.Missing, ic.Name)
 		}
 	}
+	cmp.MixedStores = len(tiendas)
+	cmp.FillCoverage()
+
+	// Solo es «la más barata» la cadena que tiene la lista completa: comparar
+	// un total parcial daría por ganadora a una cadena donde no podrías
+	// comprar todo.
 	best := ""
-	for _, chainID := range c.order {
-		total, ok := cmp.Totals[chainID]
-		if !ok || total == 0 {
+	for _, cov := range cmp.Coverage {
+		if !cov.Complete {
 			continue
 		}
-		if best == "" || total < cmp.Totals[best] {
-			best = chainID
+		if best == "" || cmp.Totals[cov.Chain] < cmp.Totals[best] {
+			best = cov.Chain
 		}
 	}
 	cmp.CheapestChain = best
 	if best != "" {
-		for chainID, total := range cmp.Totals {
-			if chainID != best && total > cmp.Totals[best] {
-				if saving := total - cmp.Totals[best]; saving > cmp.MaxSaving {
+		for _, cov := range cmp.Coverage {
+			if cov.Complete && cov.Chain != best {
+				if saving := cmp.Totals[cov.Chain] - cmp.Totals[best]; saving > cmp.MaxSaving {
 					cmp.MaxSaving = saving
 				}
 			}
@@ -156,7 +203,7 @@ func (c *Core) fillReview(cmp *Comparison) error {
 	for _, item := range cmp.Items {
 		for _, chainID := range cmp.Chains {
 			candidatos := alts[item.Name][chainID]
-			opt, ok := optionByChain(item, chainID)
+			opt, ok := pricedOption(item, chainID)
 			switch {
 			case ok && opt.Score < match.AutoThreshold:
 				review := ReviewItem{Name: item.Name, Chain: chainID, Score: opt.Score}
@@ -181,6 +228,34 @@ func (c *Core) fillReview(cmp *Comparison) error {
 	return nil
 }
 
+// FillCoverage cuenta los productos de la lista que tiene cada cadena. Una
+// cadena con productos de menos se considera incompleta y su total no sirve
+// para hacer la compra entera.
+func (c *Comparison) FillCoverage() {
+	for _, chainID := range c.Chains {
+		cov := ChainCoverage{Chain: chainID, Total: len(c.Items)}
+		for _, item := range c.Items {
+			if _, ok := pricedOption(item, chainID); ok {
+				cov.Found++
+				continue
+			}
+			cov.Missing = append(cov.Missing, item.Name)
+		}
+		cov.Complete = cov.Total > 0 && cov.Found == cov.Total
+		c.Coverage = append(c.Coverage, cov)
+	}
+}
+
+// pricedOption devuelve la opción con precio de una cadena.
+func pricedOption(item ItemComparison, chainID string) (ChainOption, bool) {
+	for _, opt := range item.Options {
+		if opt.Chain == chainID && opt.Price > 0 {
+			return opt, true
+		}
+	}
+	return ChainOption{}, false
+}
+
 // addUnresolved añade a la comparativa los productos de la lista que no tienen
 // ningún match, para que el informe los muestre como no encontrados en vez de
 // hacerlos desaparecer.
@@ -200,14 +275,4 @@ func (c *Core) addUnresolved(cmp *Comparison) error {
 		cmp.Items = append(cmp.Items, ItemComparison{Name: it.Name, Quantity: it.Quantity})
 	}
 	return nil
-}
-
-// optionByChain devuelve la opción de la cadena, exista o no con precio.
-func optionByChain(item ItemComparison, chainID string) (ChainOption, bool) {
-	for _, opt := range item.Options {
-		if opt.Chain == chainID {
-			return opt, true
-		}
-	}
-	return ChainOption{}, false
 }

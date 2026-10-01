@@ -95,12 +95,19 @@ docker compose run --rm app --cadenas mercadona,dia
 su precio, el precio por kilo o litro, si está en oferta y el enlace a la ficha,
 con el total de esa cadena al final.
 
-**`datos/informe.md`** es la comparativa: una fila por producto con el precio más
-barato, el supermercado, el nombre del producto elegido y el enlace, más los
-totales por cadena, la compra mixta y el ahorro. Añade dos secciones solo si
-hacen falta:
+**`datos/informe.md`** es la comparativa. Arriba dice **cómo comprar la lista
+entera**: solo cuentan las cadenas que tienen **todos** los productos, así que una
+cadena con un total parcial (porque le falte algo) nunca sale como la más barata.
+Si ninguna tiene la lista completa, te lo dice y te propone la compra mixta. La
+tabla de totales muestra cuántos productos cubre cada una (`3 de 3`, `1 de 3
+_(parcial)_`) y en cuántas tiendas habría que entrar para la mixta.
+
+Debajo, una fila por producto con el precio más barato, el supermercado, el
+nombre del producto elegido y el enlace. Añade secciones solo si hacen falta:
 
 - **Cambios de precio**: lo que ha variado desde las ejecuciones anteriores.
+- **Sin comprar**: productos que no están en ninguna de las cadenas comparadas, que
+  es lo que impide cerrar la lista del todo.
 - **Revisar**: productos que ninguna cadena resolvió con confianza, con enlaces a
   los candidatos más parecidos para que decidas tú. Un producto no entra en los
   totales mientras sea dudoso, para no falsear el sumatorio.

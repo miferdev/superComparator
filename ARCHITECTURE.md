@@ -43,7 +43,10 @@ red ni base de datos).
    descatalogados, y guarda historial.
 4. `core.Comparison` calcula totales por cadena, ganador por producto y compra
    mixta, y añade los productos sin resolver, los cambios de precio recientes y
-   lo que hay que revisar. `report.WriteAll` escribe un markdown por cadena
+   lo que hay que revisar. Además calcula la **cobertura** de cada cadena
+   (`FillCoverage`): una cadena con productos de menos queda como incompleta, y
+   solo las completas pueden ser `CheapestChain`, porque comparar un total parcial
+   daría por ganadora a una cadena donde no podrías comprar todo. `report.WriteAll` escribe un markdown por cadena
    (`report.go`, `chains.go`) más la comparativa (`report.go`), y `Console` lo
    muestra en texto plano.
 

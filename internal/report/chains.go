@@ -12,9 +12,15 @@ import (
 // finalBase es el nombre del informe comparativo, al que se vuelve con un enlace.
 func chainReport(cmp core.Comparison, chainID, finalBase string) string {
 	name := ChainName(chainID)
+	cov := cmp.CoverageOf(chainID)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Compra en %s\n\n", name)
 	fmt.Fprintf(&b, "_Generado el %s_\n\n", cmp.GeneratedAt.Format("02/01/2006 15:04"))
+	fmt.Fprintf(&b, "Esta cadena tiene **%d de %d** productos de tu lista", cov.Found, cov.Total)
+	if !cov.Complete {
+		fmt.Fprintf(&b, ": no sirve para hacer la compra entera, le faltan %d", cov.Total-cov.Found)
+	}
+	b.WriteString(".\n\n")
 
 	b.WriteString("| Producto | Cantidad | Producto encontrado | Unidad | €/kg o €/L | Oferta | Enlace |\n")
 	b.WriteString("| --- | ---: | --- | ---: | ---: | --- | --- |\n")
@@ -34,9 +40,20 @@ func chainReport(cmp core.Comparison, chainID, finalBase string) string {
 		)
 	}
 
-	fmt.Fprintf(&b, "\n**Total en %s: %s**\n", name, money(cmp.Totals[chainID]))
+	if len(cov.Missing) > 0 {
+		b.WriteString("\n## Le faltan\n\n")
+		for _, name := range cov.Missing {
+			fmt.Fprintf(&b, "- %s\n", cell(name))
+		}
+	}
+
+	fmt.Fprintf(&b, "\n**Total de lo que sí tiene: %s**", money(cmp.Totals[chainID]))
+	if !cov.Complete {
+		b.WriteString(" _(total parcial: no incluye los productos que faltan)_")
+	}
+	b.WriteString("\n")
 	if cmp.CheapestChain == chainID {
-		fmt.Fprintf(&b, "\nEs la cadena más barata de la comparativa: %s.\n", money(cmp.Totals[chainID]))
+		fmt.Fprintf(&b, "\nEs la más barata de las que tienen la lista completa: %s.\n", money(cmp.Totals[chainID]))
 	}
 	if len(reviewOf(cmp, chainID)) > 0 {
 		b.WriteString("\n## Revisar\n\n")
