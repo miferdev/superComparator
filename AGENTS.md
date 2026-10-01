@@ -124,6 +124,10 @@ las URLs vinculadas, marca disponibilidad y guarda historial
 
 Detalles de `match` que conviene no romper: la medida **no** cuenta como prueba
 del nombre (si no, «leche infantil 1 L» encajaría con «leche semidesnatada 1 L»),
+y la **primera palabra del candidato debe estar entre las pedidas** (`headMismatch`),
+porque en las tiendas el sustantivo va primero: sin esa regla «fresas» cogía
+«mermelada de fresa» y «pipas de calabaza» cogía «pan con pipas de calabaza», porque
+`coverage` no penaliza las palabras de más del candidato (para que la marca no estorbe),
 un pack se rechaza si no se pidió pack, y un formato muy distinto (>2x) penaliza
 fuerte. `chain.FormatFromName` conserva el multiplicador de los packs.
 

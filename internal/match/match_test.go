@@ -167,3 +167,54 @@ func TestSimilarityFormatoDistinto(t *testing.T) {
 		}
 	}
 }
+
+// TestSimilarityProductoQueLoLlevaDentro cubre el caso de «fresas», que se
+// emparejaba con «mermelada de fresa», y el de «pipas de calabaza», que se
+// emparejaba con «pan con pipas de calabaza». En ambos, el candidato es otro
+// producto que contiene lo pedido.
+func TestSimilarityProductoQueLoLlevaDentro(t *testing.T) {
+	casos := []struct {
+		nombre, producto, formato string
+		quiere                    bool
+	}{
+		{"fresas", "Mermelada de fresa Hacendado", "340 g", false},
+		{"fresas", "Fresas Hacendado 500 g", "500 g", true},
+		{"fresas", "Sirope Alipende 300g fresa", "300 g", false},
+		{"pipas de calabaza", "Pan de molde semillas y pipas de calabaza Hacendado", "", false},
+		{"pipas de calabaza", "Pipas de calabaza peladas 100 g", "100 g", true},
+		{"Leche semidesnatada 1L", "Leche semidesnatada Hacendado", "1 L", true},
+		{"Leche semidesnatada 1L", "Leche Asturiana 1l semidesnatada", "1 L", true},
+		{"Leche entera 1L", "Leche entera Asturiana 1 L", "1 L", true},
+		{"Pan de molde blanco", "Pan de molde blanco Hacendado", "600 g", true},
+		{"Pan de molde blanco", "Pan de molde sin corteza Alipende 450g", "450 g", true},
+		{"copos de avena suaves", "Copos de avena Brüggen", "500 g", true},
+		{"copos de avena suaves", "Copos avena integrales sin gluten bio Ecocesta 500g", "500 g", true},
+		{"Kéfir natural", "Kéfir natural sabor suave", "1 kg", true},
+	}
+	for _, c := range casos {
+		got := Similarity(c.nombre, c.producto, c.formato)
+		if (got >= AutoThreshold) != c.quiere {
+			t.Errorf("Similarity(%q, %q, %q) = %.2f (aceptado=%v), quiero aceptado=%v",
+				c.nombre, c.producto, c.formato, got, got >= AutoThreshold, c.quiere)
+		}
+	}
+}
+
+// TestHeadMismatch documenta la regla con la que se decide.
+func TestHeadMismatch(t *testing.T) {
+	casos := []struct {
+		query, name string
+		mismatch    bool
+	}{
+		{"fresas", "Mermelada de fresa", true},
+		{"fresas", "Fresas congeladas", false},
+		{"pipas de calabaza", "Pan con pipas de calabaza", true},
+		{"pipas de calabaza", "Pipas calabaza", false},
+		{"Leche entera 1L", "Leche entera Hacendado", false},
+	}
+	for _, c := range casos {
+		if got := headMismatch(Tokens(c.query), Tokens(c.name)); got != c.mismatch {
+			t.Errorf("headMismatch(%q, %q) = %v, want %v", c.query, c.name, got, c.mismatch)
+		}
+	}
+}

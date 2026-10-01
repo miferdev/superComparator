@@ -264,6 +264,10 @@ func Similarity(query, name, format string) float64 {
 			score -= 0.55
 		}
 	}
+	if headMismatch(at, bt) {
+		// El producto no es el que se pidió: es otro que lo lleva dentro.
+		score *= 0.4
+	}
 	if !strings.Contains(strings.ToLower(query), "pack") && isPack(format+" "+name) {
 		score -= 0.1
 	}
@@ -274,6 +278,21 @@ func Similarity(query, name, format string) float64 {
 		return 1
 	}
 	return score
+}
+
+// headMismatch avisa de que el candidato es otro producto que contiene lo que
+// se pidió. En las tiendas el sustantivo principal va el primero («Mermelada de
+// fresa», «Pipas de calabaza»), así que si esa primera palabra no está entre las
+// que se han pedido, no es el producto buscado: es otro que lo lleva dentro.
+func headMismatch(queryTokens, nameTokens []string) bool {
+	if len(queryTokens) == 0 || len(nameTokens) == 0 {
+		return false
+	}
+	pedidos := make(map[string]bool, len(queryTokens))
+	for _, t := range queryTokens {
+		pedidos[t] = true
+	}
+	return !pedidos[nameTokens[0]]
 }
 
 // nameTokens descarta los tokens que son solo una medida. Si el nombre se queda

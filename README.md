@@ -109,7 +109,9 @@ nombre del producto elegido y el enlace. Añade secciones solo si hacen falta:
 - **Sin comprar**: productos que no están en ninguna de las cadenas comparadas, que
   es lo que impide cerrar la lista del todo.
 - **Revisar**: productos que ninguna cadena resolvió con confianza, con enlaces a
-  los candidatos más parecidos para que decidas tú. Un producto no entra en los
+  los candidatos más parecidos para que decidas tú. El programa es conservador a
+  propósito: si el candidato es otro producto que contiene el tuyo (la mermelada
+  entre las fresas, el pan entre las pipas) no lo acepta. Un producto no entra en los
   totales mientras sea dudoso, para no falsear el sumatorio.
 
 En consola se imprime la misma comparativa en texto plano.
