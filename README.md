@@ -28,10 +28,11 @@ Dos cosas que conviene no confundir:
 - **«Precios activos»** es el interruptor por cadena (`precios_activos` en la
   tabla `chains`): dice si la cola de precios podrá visitar esas fichas. Alcampo
   lo tiene apagado a propósito, no porque su catálogo falte.
-- **Precio guardado** hoy es `0` en las cuatro cadenas. Todavía no hay nadie que
-  descargue fichas: falta el worker de la cola de precios (ver
-  [qué no existe todavía](#qué-no-existe-todavía)). El catálogo y la búsqueda ya
-  funcionan; los precios todavía no.
+- **Precio guardado** depende de cuánto haya corrido la cola. El worker existe y
+  `serve` lo arranca en segundo plano al levantar la web, así que acaba
+  llenándose solo; si acabas de indexar, lo normal es seguir viendo `precio: 0`
+  en todo: no es un fallo, es que la cola todavía no ha llegado a esas fichas. Se
+  ve en `GET /api/cadenas` y en vivo en `GET /api/eventos`.
 
 La búsqueda con FTS5 responde en **4-26 ms** sobre las 106.000 filas. El
 tokenizador le quita las tildes, así que escribir «fresas» (plural, sin tilde)
@@ -44,9 +45,10 @@ stopwords ni plurales, para que «fresa» encuentre lo mismo.
 docker compose up --build
 ```
 
-Y abre <http://127.0.0.1:8080>. El contenedor arranca la web del catálogo y deja
-la API en marcha. `--build` importa: sin él se reutiliza la imagen anterior y
-puedes estar viendo una versión vieja. `make up` ya lo incluye.
+Y abre <http://127.0.0.1:8080>. El contenedor arranca la web del catálogo, deja
+la API en marcha y echa la cola de precios en segundo plano (va rellenando
+precios mientras navegas). `--build` importa: sin él se reutiliza la imagen
+anterior y puedes estar viendo una versión vieja. `make up` ya lo incluye.
 
 El puerto está publicado solo en `127.0.0.1`, así que la web no sale del
 ordenador. Para abrirla desde el móvil tendrías que cambiar el mapeo a
@@ -74,6 +76,9 @@ dia                7755           0         7755
 mercadona          4320           0         4320
 ```
 
+Esos ceros en «Con precio» son los de un catálogo recién indexado: la cola de
+precios va rellenándolos después (siguiente sección).
+
 Para probar sin llenar 106.000 filas:
 
 ```sh
@@ -83,12 +88,50 @@ docker compose run --rm app crawl index --max 500
 Se puede repetir tantas veces como quieras: el `upsert` es idempotente sobre
 `(cadena, url)`, así que no duplica nada **ni pisa los precios** que ya tengas.
 
+## Rellenar los precios
+
+Descargar fichas es la parte lenta: respeta el ritmo de cada tienda (pausa y
+concurrencia están en la tabla `chains`), así que 100.000 fichas son horas. El
+trabajo se guarda en la base, en `price_queue`, de modo que se puede parar y
+seguir: al arrancar, `serve` arranca la cola **en segundo plano** y la web
+responde mientras tanto. Si el proceso muere, al siguiente arranque se reanuda
+sola.
+
+Para verlo sin esperar horas, una pasada acotada desde la línea de comandos:
+
+```sh
+# 20 fichas, y al terminar dice cuántas salieron con precio y cuántas fallaron
+docker compose run --rm app crawl precios --limit 20
+
+# solo una tienda, para depurar su scraper
+docker compose run --rm app crawl precios --limit 5 --cadenas dia
+```
+
+Y para seguir el progreso sin preguntar cada poco:
+
+```sh
+# stream: un evento 'estado' cada 2 segundos, se corta con Ctrl-C
+curl -N http://127.0.0.1:8080/api/eventos
+```
+
+Sale una línea por evento con, por cadena, `pendiente`, `descargando`, `error` y
+`precios`:
+
+```
+event: estado
+data: {"cadenas":[{"cadena":"mercadona","nombre":"Mercadona","pendiente":4289,"descargando":1,"error":3,"precios":28}],"cuando":"2026-10-02T09:14:05Z"}
+```
+
+Alcampo no aparece avanzando porque viene con `precios_activos = 0`: sus fichas
+siguen en la cola, que es justo donde deben estar.
+
 ## Comandos
 
 | Comando | Qué hace |
 |---------|----------|
-| `supercomparator` o `supercomparator serve` | Levanta la web del catálogo (es lo que hace por defecto) |
+| `supercomparator` o `supercomparator serve` | Levanta la web del catálogo y arranca la cola de precios en segundo plano (es lo que hace por defecto) |
 | `supercomparator crawl index [--max N]` | Indexa los catálogos desde los sitemaps (`--max` acota para probar) |
+| `supercomparator crawl precios [--limit N]` | Una pasada de la cola de precios: descarga hasta N fichas y dice cuántas salieron con precio y cuántas fallaron |
 | `supercomparator smoke --url cadena=url` | Descarga una ficha de cada cadena: diagnóstico de un scraper roto |
 | `supercomparator version` | Versión con la que se compiló |
 
@@ -114,6 +157,7 @@ tienda: solo lee y escribe en la base.
 | `GET /api/cadenas` | Las cuatro tiendas: total, con precio, sin precio, fase, pausada, precios activos |
 | `GET /api/catalogo?q=&cadena=&conPrecio=&orden=&offset=&limite=` | Búsqueda paginada |
 | `GET /api/producto?cadena=&url=` | Un producto por cadena y URL |
+| `GET /api/eventos` | Server-Sent Events con el estado de la cola de precios (un evento `estado` cada 2 s) |
 | `GET /api/version` | Versión |
 | `GET /` | Página HTML mínima que lista la API (la SPA llega en la fase 2) |
 
@@ -136,13 +180,16 @@ curl -s 'http://127.0.0.1:8080/api/catalogo?q=fresas&conPrecio=1&orden=precio_as
 curl -s --get http://127.0.0.1:8080/api/producto \
   --data-urlencode 'cadena=mercadona' \
   --data-urlencode 'url=https://tienda.mercadona.es/product/3723/fresas-bandeja'
+
+# Seguir la cola de precios en vivo (Ctrl-C para cortarlo)
+curl -N http://127.0.0.1:8080/api/eventos
 ```
 
 `GET /api/catalogo` devuelve `{productos, total, hayMas}`. Cada producto trae
 `precio`, `precioBase` (`unidad` o `kg`: así lo publica la tienda),
 `precioMedida` (por kg o l, que es lo comparable), `medidaValor`,
-`medidaUnidad`, `url` (enlace a la ficha), `tienePrecio`, `precioViejo` y
-`frescuraHoras`:
+`medidaUnidad`, `url` (enlace a la ficha), `tienePrecio`, `precioSoloMedida`,
+`precioViejo` y `frescuraHoras`:
 
 ```json
 {
@@ -163,6 +210,7 @@ curl -s --get http://127.0.0.1:8080/api/producto \
   "precioComprobado": "0001-01-01T00:00:00Z",
   "nombreFuente": "slug",
   "tienePrecio": false,
+  "precioSoloMedida": false,
   "precioViejo": false,
   "frescuraHoras": 0
 }
@@ -173,6 +221,10 @@ todavía no se ha visitado. Cuando lo esté, vendrán `precio`, `precioMedida` y
 `precioComprobado` con la fecha; `precioViejo` se pone a `true` cuando el precio
 pasa de `precioMaxHoras` (24 h por defecto) y es la señal de que hay que
 recomprobarlo.
+
+Un `precio: 0` con `precioSoloMedida: true` es otro caso: la tienda **solo**
+publica €/kg o €/l (los plátanos, que se venden al peso), así que no hay precio de
+unidad que guardar y el dato está en `precioMedida`. No es un dato que falte.
 
 ## Configuración
 
@@ -189,8 +241,8 @@ Todo se ajusta por variables de entorno; las flags las sobreescriben.
 | `SUPERCOMPARATOR_LOG` | (vacío) | Fichero de log; si se deja vacío los logs se descartan |
 
 Flags (válidas en todos los subcomandos): `--addr`, `--db`, `--browser-bin`,
-`--cadenas`, `--log`. Además, `crawl index` acepta `--max N` y `smoke` acepta
-`--url cadena=url`.
+`--cadenas`, `--log`. Además, `crawl index` acepta `--max N`, `crawl precios`
+acepta `--limit N` y `smoke` acepta `--url cadena=url`.
 
 Sin Docker hace falta Go 1.27 y un Chromium/Chrome en el `PATH` (si no,
 `SUPERCOMPARATOR_BROWSER_BIN=/ruta/a/chrome`):
@@ -198,6 +250,7 @@ Sin Docker hace falta Go 1.27 y un Chromium/Chrome en el `PATH` (si no,
 ```sh
 make serve                 # o: go run ./cmd/supercomparator serve
 make index                 # o: go run ./cmd/supercomparator crawl index
+go run ./cmd/supercomparator crawl precios --limit 20   # una pasada acotada
 ```
 
 ## Las cuatro cadenas
@@ -212,9 +265,11 @@ make index                 # o: go run ./cmd/supercomparator crawl index
 **DÍA.** El sitemap publica rutas como
 `/aceites-salsas-y-especias/aceites/p/100`: no hay nombre de producto, solo la
 sección. Sus 7.755 filas nacen con `crawl_state = ficha_pendiente` y
-`name_source = categoria`, y es la cola de precios la que tiene que visitarlas
-para escribir el nombre real que publica la ficha. Hasta entonces, lo que se
-busca en DÍA son categorías («leche», «vino tinto»), no productos concretos.
+`name_source = categoria`. Cuando la cola visita la ficha escribe el nombre real
+que publica (`store.FichaData` pone `name_source = 'ficha'` y saca el producto de
+`ficha_pendiente`), así que sus productos dejan de llamarse «leche» y aparecen al
+buscar «leche entera». Hasta que la cola llega, lo que se busca en DÍA son
+categorías, no productos concretos.
 
 **Alcampo.** Su catálogo se lee muy bien (89.615 productos), pero las fichas están
 detrás de un WAF que responde 403 a los clientes automatizados, así que no sale
@@ -227,19 +282,15 @@ Para no prometer nada que no esté en el repo:
 
 - **La SPA de Angular.** Hoy `GET /` devuelve una página HTML mínima que lista la
   API. La API está lista; la web no.
-- **La cola de precios.** Es lo que rellena los precios: falta el worker que
-  consume `price_queue`. Sí están escritos el estado en SQLite y las operaciones
-  de `store` (`EnqueuePrices`, `NextQueued`, `FailQueue`, `MarkQueueDone`), así
-  que cuando se escriba no habrá que rediseñar nada. Como no hay quien consuma la
-  cola, hoy ningún producto tiene precio y `price_history` sigue vacía.
 - **La comparación «en otras tiendas».** No hay ninguna vista que agrupe el mismo
   producto entre cadenas: la comparación la hace la persona, producto a producto,
   con `precioMedida` a la vista.
 - **«Mi lista».** La tabla `list_items` existe y está vacía, pero no hay
   endpoints ni nada que la use: sin añadir productos, sin subtotales ni total.
-- Tampoco hay: notificaciones por SSE, recomprobación de un precio viejo al
-  abrirlo, ni consulta del histórico de cambios por la API (`store.Changes` existe
-  en el código, pero ningún endpoint lo llama).
+- Tampoco hay: recomprobación de un precio viejo al abrirlo (el SSE solo avisa
+  del progreso de la cola, no de un precio caducado) ni consulta del histórico de
+  cambios por la API (`store.Changes` existe en el código, pero ningún endpoint
+  lo llama).
 
 ## Scraping responsable
 

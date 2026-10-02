@@ -9,7 +9,7 @@ import (
 )
 
 func TestSelectChains(t *testing.T) {
-	todos, err := selectChains(nil)
+	todos, err := selectChains(config.Config{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestSelectChains(t *testing.T) {
 }
 
 func TestSelectChainsDesconocida(t *testing.T) {
-	chains, err := selectChains([]string{"carrefour"})
+	chains, err := selectChains(config.Config{}, []string{"carrefour"})
 	if err == nil {
 		closeChains(chains)
 		t.Fatal("una cadena desconocida debe dar error")

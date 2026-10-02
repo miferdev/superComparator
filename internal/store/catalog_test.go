@@ -417,8 +417,9 @@ func TestColaDePrecios(t *testing.T) {
 
 	// Un fallo devuelve la entrada con el backoff puesto.
 	proximo := time.Now().Add(5 * time.Minute)
-	if err := st.FailQueue(colaID(t, st, "m1"), 1, proximo, "timeout"); err != nil {
-		t.Fatalf("FailQueue: %v", err)
+	estado, err := st.FailQueue(colaID(t, st, "m1"), 1, proximo, "timeout")
+	if err != nil || estado != "pendiente" {
+		t.Fatalf("FailQueue = %q, %v", estado, err)
 	}
 	if cola, err = st.NextQueued(time.Now().Add(time.Hour), 10); err != nil || len(cola) != 1 {
 		t.Fatalf("cola tras el fallo = %+v, %v", cola, err)
@@ -429,7 +430,7 @@ func TestColaDePrecios(t *testing.T) {
 	if cola, err = st.NextQueued(time.Now().Add(time.Minute), 10); err != nil || len(cola) != 0 {
 		t.Fatalf("salió antes de su momento: %+v, %v", cola, err)
 	}
-	if err := st.FailQueue(colaID(t, st, "m1"), 2, proximo, "timeout otra vez"); err != nil {
+	if _, err := st.FailQueue(colaID(t, st, "m1"), 2, proximo, "timeout otra vez"); err != nil {
 		t.Fatalf("FailQueue: %v", err)
 	}
 	cola, err = st.NextQueued(time.Now().Add(time.Hour), 10)
@@ -679,5 +680,94 @@ func TestMigracionesSoloUnaVez(t *testing.T) {
 	res, err := st.Search(SearchQuery{Text: "fresas"})
 	if err != nil || res.Total != 1 {
 		t.Fatalf("el catálogo se perdió al reabrir: %+v, %v", res, err)
+	}
+}
+
+func TestFichaData(t *testing.T) {
+	st := abrir(t)
+	preparar(t, st)
+	sembrar(t, st)
+
+	// El caso de DÍÁ: el sitemap solo traía la categoría, así que el producto
+	// está sin nombre real y marcado como pendiente de ficha.
+	if _, err := st.db.Exec(`
+		INSERT INTO products (chain, url, name, search_name, format, category, name_source,
+			crawl_state, available, first_seen, last_seen)
+		VALUES ('dia', '/p/1', 'Leches', 'leches', '1 L', 'Leches', 'categoria',
+			'ficha_pendiente', 1, ?, ?)`, ts(time.Now()), ts(time.Now())); err != nil {
+		t.Fatalf("sembrar dia: %v", err)
+	}
+
+	var id int64
+	if err := st.db.QueryRow(`SELECT id FROM products WHERE chain = 'dia' AND url = '/p/1'`).Scan(&id); err != nil {
+		t.Fatalf("id: %v", err)
+	}
+
+	if _, _, err := st.FichaData(id, "Leche entera Asturiana 1 L", "leche entera asturiana",
+		"Lácteos / Leches"); err != nil {
+		t.Fatalf("FichaData: %v", err)
+	}
+
+	var name, search, category, source, state string
+	if err := st.db.QueryRow(`
+		SELECT name, search_name, category, name_source, crawl_state
+		FROM products WHERE id = ?`, id).
+		Scan(&name, &search, &category, &source, &state); err != nil {
+		t.Fatalf("leer: %v", err)
+	}
+	if name != "Leche entera Asturiana 1 L" || search != "leche entera asturiana" {
+		t.Fatalf("nombre = %q, search_name = %q", name, search)
+	}
+	if category != "Lácteos / Leches" {
+		t.Fatalf("categoría = %q", category)
+	}
+	// Con nombre de ficha el producto deja de estar pendiente.
+	if source != "ficha" || state != "catalogado" {
+		t.Fatalf("name_source = %q, crawl_state = %q", source, state)
+	}
+
+	// Y ahora tiene que aparecer por su nombre de verdad, que es el motivo.
+	res, err := st.Search(SearchQuery{Text: "asturiana"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if res.Total != 1 || res.Products[0].Name != "Leche entera Asturiana 1 L" {
+		t.Fatalf("el nombre de la ficha no se busca: %+v", res)
+	}
+}
+
+func TestFichaDataNoDegradaLoBueno(t *testing.T) {
+	st := abrir(t)
+	preparar(t, st)
+	sembrar(t, st)
+
+	p, _, err := st.Product("ahorramas", "a1")
+	if err != nil {
+		t.Fatalf("Product: %v", err)
+	}
+
+	// Una ficha sin nombre no puede tirar abajo el nombre del sitemap, ni
+	// convertir sus tokens en el nombre en crudo.
+	if _, _, err := st.FichaData(p.ID, "", "", "Alimentación / Legumbres"); err != nil {
+		t.Fatalf("FichaData: %v", err)
+	}
+	var name, search string
+	if err := st.db.QueryRow(`SELECT name, search_name FROM products WHERE id = ?`, p.ID).
+		Scan(&name, &search); err != nil {
+		t.Fatalf("leer: %v", err)
+	}
+	if name != "Mermelada de fresa" {
+		t.Fatalf("name = %q", name)
+	}
+	if search == "" || search == name {
+		t.Fatalf("search_name se degradó a %q", search)
+	}
+}
+
+func TestFichaDataProductoQueNoEsta(t *testing.T) {
+	st := abrir(t)
+	preparar(t, st)
+	if _, _, err := st.FichaData(999, "Leche", "leche", ""); err == nil {
+		t.Fatal("un producto que no está no puede escribirse en silencio")
 	}
 }

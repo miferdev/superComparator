@@ -26,6 +26,9 @@ func TestParseProduct(t *testing.T) {
 	if p.MeasurePrice != 1.24 || p.MeasureUnit != "l" {
 		t.Errorf("precio por unidad = %v %q, want 1.24 l", p.MeasurePrice, p.MeasureUnit)
 	}
+	if p.PrecioEsPorMedida() {
+		t.Error("1,24 € es el precio de la botella; el €/LITRO es solo el desglose")
+	}
 	if !p.Available {
 		t.Error("el producto está InStock y debería estar disponible")
 	}
@@ -37,6 +40,99 @@ func TestParseProduct(t *testing.T) {
 	}
 	if p.Category != "Huevos leche y mantequilla / Leche" {
 		t.Errorf("categoría = %q", p.Category)
+	}
+}
+
+// TestParseProductPrecioPorPeso cubre el producto que DÍA vende al peso: el
+// precio publicado lleva la unidad encima, así que Price queda vacío y lo
+// único que hay es el €/kg. La ficha no da error por ello.
+func TestParseProductPrecioPorPeso(t *testing.T) {
+	const html = `<html><head>
+	<script type="application/ld+json">
+	{"@context":"https://schema.org/","@type":"Product","name":"Plátano de Canarias IGP",
+	 "offers":{"@type":"Offer","price":1.65,"priceCurrency":"EUR","availability":"https://schema.org/InStock"}}
+	</script></head><body>
+	<div class="buy-box__prices">
+		<p class="buy-box__active-price">1,65&nbsp;€/KG</p>
+		<p class="buy-box__price-per-unit"> (1,65&nbsp;€/KG) </p>
+	</div></body></html>`
+	p, err := ParseProduct(html, "https://www.dia.es/frutas-y-verduras/platano/p/90001")
+	if err != nil {
+		t.Fatalf("ParseProduct: %v", err)
+	}
+	if p.Price != 0 || p.UnitPrice != 0 {
+		t.Errorf("un €/KG no es un precio de unidad: Price = %v, UnitPrice = %v", p.Price, p.UnitPrice)
+	}
+	if p.MeasurePrice != 1.65 || p.MeasureUnit != "kg" {
+		t.Errorf("precio por medida = %v %q, want 1.65 kg", p.MeasurePrice, p.MeasureUnit)
+	}
+	if !p.PrecioEsPorMedida() {
+		t.Error("1,65 €/KG es un precio por medida")
+	}
+	if p.Category != "Frutas y verduras / Platano" {
+		t.Errorf("categoría = %q", p.Category)
+	}
+}
+
+// TestParseProductDesescapaEntidades cubre el fallo que motivó el cambio: el
+// JSON-LD es texto plano para el parser de HTML, así que sus entidades llegaban
+// tal cual a products.name ("Hellmann&#039;s") y el usuario no encontraba el
+// producto buscando el apóstrofo. El precio sale del dato estructurado y no se
+// toca: 1,65 sigue siendo 1,65.
+func TestParseProductDesescapaEntidades(t *testing.T) {
+	const html = `<html><head>
+	<script type="application/ld+json">
+	{"@context":"https://schema.org/","@type":"Product",
+	 "name":"Salsa barbacoa Hellmann&#039;s 285 g &amp; Guacamole",
+	 "sku":"91001","brand":{"@type":"Brand","name":"Hellmann&#x27;s &amp; Co"},
+	 "offers":{"@type":"Offer","price":1.65,"priceCurrency":"EUR","availability":"https://schema.org/InStock"}}
+	</script></head><body>
+	<div class="buy-box__prices">
+		<p class="buy-box__active-price">1,65&nbsp;€/ud</p>
+		<p class="buy-box__price-per-unit">1,65&nbsp;€/ud</p>
+	</div></body></html>`
+	p, err := ParseProduct(html, "https://www.dia.es/salsas-y-condimentos/salsas/p/91001")
+	if err != nil {
+		t.Fatalf("ParseProduct: %v", err)
+	}
+	if p.Name != "Salsa barbacoa Hellmann's 285 g & Guacamole" {
+		t.Errorf("nombre = %q", p.Name)
+	}
+	if p.Brand != "Hellmann's & Co" {
+		t.Errorf("marca = %q", p.Brand)
+	}
+	if p.Price != 1.65 || p.UnitPrice != 1.65 {
+		t.Errorf("el precio no se toca: Price = %v, UnitPrice = %v, want 1.65", p.Price, p.UnitPrice)
+	}
+	// "/ud" no es una medida continua: desescapar no puede inventarla.
+	if p.MeasurePrice != 0 || p.MeasureUnit != "" {
+		t.Errorf("medida = %v %q, want vacío", p.MeasurePrice, p.MeasureUnit)
+	}
+	if p.Format != "285 g" {
+		t.Errorf("formato = %q, want 285 g", p.Format)
+	}
+}
+
+// TestParseProductNoDesescapaDosVeces es el test que impide arreglar el doble
+// desescapo: en el JSON-LD "&amp;lt;" quiere decir "&lt;" escrito, así que el
+// resultado es "&lt;" y no "<". Desescapar el texto compuesto entero, en vez de
+// solo el JSON-LD, convertiría esto en "<".
+func TestParseProductNoDesescapaDosVeces(t *testing.T) {
+	const html = `<html><head>
+	<script type="application/ld+json">
+	{"@context":"https://schema.org/","@type":"Product","name":"Cacao &amp;lt; 100 g &amp; chocolate",
+	 "brand":{"@type":"Brand","name":"Marca &amp;amp;"},
+	 "offers":{"@type":"Offer","price":2.5,"priceCurrency":"EUR","availability":"https://schema.org/InStock"}}
+	</script></head><body></body></html>`
+	p, err := ParseProduct(html, "https://www.dia.es/desayunos/cacao/p/91002")
+	if err != nil {
+		t.Fatalf("ParseProduct: %v", err)
+	}
+	if p.Name != "Cacao &lt; 100 g & chocolate" {
+		t.Errorf("nombre = %q, want %q", p.Name, "Cacao &lt; 100 g & chocolate")
+	}
+	if p.Brand != "Marca &amp;" {
+		t.Errorf("marca = %q, want %q", p.Brand, "Marca &amp;")
 	}
 }
 

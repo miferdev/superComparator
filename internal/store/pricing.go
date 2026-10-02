@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/miferdev/superComparator/internal/chain"
 )
 
 // SetPrice guarda el precio descargado de una ficha: actualiza el producto y
@@ -33,8 +35,9 @@ func (s *Store) SetPrice(productID int64, price float64, basis string, measurePr
 	stamp := time.Now()
 	if _, err := tx.Exec(`
 		UPDATE products
-		SET price = ?, price_basis = ?, measure_price = ?, available = ?, price_fetched_at = ?
-		WHERE id = ?`, price, basis, measurePrice, flag, ts(stamp), productID); err != nil {
+		SET price = ?, price_basis = ?, measure_price = ?, measure_unit = ?,
+		    available = ?, price_fetched_at = ?
+		WHERE id = ?`, price, basis, measurePrice, measureUnit, flag, ts(stamp), productID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -45,4 +48,27 @@ func (s *Store) SetPrice(productID int64, price float64, basis string, measurePr
 		return err
 	}
 	return tx.Commit()
+}
+
+// priceBasis dice en qué unidad venía publicado el precio: si la tienda da un
+// precio por medida, ese es el que se puede comparar con otras tiendas; si da
+// un precio por unidad con el de la medida aparte, lo publicado es el de
+// unidad. Sin medida publicada no se deduce ninguna: measure_price se queda a
+// 0 y la base es la unidad.
+// priceBasis dice en qué base está el precio que se guarda en products.price,
+// que es el que la web enseña y el que se suma al total de la compra.
+//
+// Si la tienda publica un precio de unidad y además el €/kg, el precio es el de
+// la unidad: una botella de vino a 3,65 € que además está a 4,87 €/l no es un
+// producto "de base l", sigue siendo una botella. La base solo es la medida cuando
+// no hay precio de unidad, que es el caso de lo vendido al peso: los plátanos a
+// 1,65 €/kg no tienen precio de unidad porque no la hay.
+func priceBasis(p chain.Product) string {
+	if p.Price > 0 {
+		return "unidad"
+	}
+	if p.PrecioEsPorMedida() || p.MeasurePrice > 0 {
+		return p.MeasureUnit
+	}
+	return "unidad"
 }

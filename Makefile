@@ -28,9 +28,15 @@ serve:
 run: serve
 
 # index lee los sitemaps y guarda el catálogo. Los precios los rellena la cola
-# de precios, que todavía no está (fase 2).
+# de precios: `make precios` o solo, en segundo plano, al levantar la web.
 index:
 	go run ./cmd/supercomparator crawl index
+
+# precios hace una pasada de la cola de precios: es la forma de probar contra la
+# web real sin levantar el servidor. LIMIT=200 acota la pasada.
+LIMIT ?= 0
+precios:
+	go run ./cmd/supercomparator crawl precios --limit $(LIMIT)
 
 docker-build:
 	docker compose build

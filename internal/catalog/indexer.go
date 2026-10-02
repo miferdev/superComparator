@@ -185,6 +185,36 @@ func (ix *Indexer) failChain(runID int64, chainID, fase string, cause error) err
 	return fmt.Errorf("indexando %s: %w", chainID, cause)
 }
 
+// SetFichaDatos actualiza el nombre y la categoría de un producto con los que
+// publica su propia ficha. Hace falta sobre todo para DÍA, cuyo sitemap solo
+// trae la categoría: sin esto, sus productos se llaman «leche» y no aparecen
+// nunca al buscar «leche entera».
+//
+// search_name se recalcula con los mismos tokens que usa el indexador para no
+// romper la búsqueda: si se quedara con los del slug, el nombre real no se
+// encontraría. Solo escribe lo que venga informado, para no degradar lo bueno
+// que ya había.
+func (c *Catalog) SetFichaDatos(productID int64, name, category string) error {
+	nombre := strings.TrimSpace(name)
+	cat := strings.TrimSpace(category)
+	if nombre == "" && cat == "" {
+		return nil
+	}
+	if _, _, err := c.store.FichaData(productID, nombre, searchNameFor(nombre), cat); err != nil {
+		return err
+	}
+	return nil
+}
+
+// searchNameFor es el nombre normalizado que se guarda para poder buscar.
+func searchNameFor(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return strings.Join(match.Tokens(name), " ")
+}
+
 // productFromEntry convierte una entrada de sitemap en un producto del catálogo.
 // La medida sale del texto del nombre, que es donde la traen las cuatro cadenas.
 func productFromEntry(chainID string, e chain.SitemapEntry) store.Product {

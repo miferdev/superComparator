@@ -40,6 +40,7 @@ func ParseProduct(html, url string) (chain.Product, error) {
 	if p.Name == "" {
 		return chain.Product{}, errNoProduct
 	}
+	p.Category = categoryFromBreadcrumb(detail)
 
 	var spans []string
 	detail.Find(".product-format__size").First().Find(`span[aria-hidden="true"]`).Each(func(_ int, s *goquery.Selection) {
@@ -59,18 +60,21 @@ func ParseProduct(html, url string) (chain.Product, error) {
 	priceSel := detail.Find("p.product-price__unit-price").First()
 	priceText := strings.Join(strings.Fields(priceSel.Text()), " ")
 	if f, ok := chain.ParsePrice(priceText); ok {
-		p.Price = f
-		p.UnitPrice = f
 		p.Available = true
-		// En productos vendidos al peso el precio viene como €/kg o €/l. Se
-		// guarda además como precio por medida para que el informe lo muestre y
-		// el total siga siendo interpretable.
+		// Los productos que Mercadona vende al peso (plátanos, carne…) publican
+		// el precio por medida en el propio precio ("1,65 €/kg"). Lo único
+		// publicado es ese, así que Price se deja a 0: poner 1,65 ahí haría que
+		// la web enseñase el precio del kilo como si fuera el de una bolsa.
 		if m, ok := chain.ParseMeasurePrice(priceText); ok {
+			p.PriceIsPerMeasure = true
 			p.MeasurePrice = m.Value
 			p.MeasureUnit = m.Unit
 			if p.Format == "" {
 				p.Format = "1 " + m.Unit
 			}
+		} else {
+			p.Price = f
+			p.UnitPrice = f
 		}
 	}
 	extra := strings.ToLower(detail.Find("p.product-price__extra-price").First().Text())
@@ -89,4 +93,29 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		p.PromoText = strings.Join(strings.Fields(promo), " ")
 	}
 	return p, nil
+}
+
+// categoryFromBreadcrumb saca la categoría de la miga de pan de la ficha: el
+// nivel superior y el fino llegan en dos span ("Cacao, café e infusiones >" y
+// "Cacao soluble y chocolate a la taza") y se unen con " / ", el formato que ya
+// usa DÍA. La miga es la única parte de la ficha que describe la sección: el
+// nombre del producto no la lleva.
+func categoryFromBreadcrumb(detail *goquery.Selection) string {
+	var niveles []string
+	detail.Find(".private-product-detail__header-breadcrumb a").Each(func(_ int, a *goquery.Selection) {
+		a.Find("span").Each(func(_ int, s *goquery.Selection) {
+			niveles = append(niveles, breadcrumbLevel(s.Text()))
+		})
+	})
+	return chain.CategoryPath(niveles...)
+}
+
+// breadcrumbLevel limpia un nivel de la miga: el superior llega con la flecha
+// de separación al final.
+func breadcrumbLevel(text string) string {
+	text = strings.TrimSpace(chain.NormalizeSpaces(text))
+	if antes, _, ok := strings.Cut(text, ">"); ok {
+		text = strings.TrimSpace(antes)
+	}
+	return text
 }

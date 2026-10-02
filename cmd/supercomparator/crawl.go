@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -23,6 +24,7 @@ func crawlCmd(f *flags) *cobra.Command {
 		Aliases: []string{"catalogo"},
 	}
 	cmd.AddCommand(indexCmd(f))
+	cmd.AddCommand(preciosCmd(f))
 	return cmd
 }
 
@@ -35,7 +37,7 @@ func indexCmd(f *flags) *cobra.Command {
 		Short: "Indexa los catálogos desde los sitemaps",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg := loadConfig(f)
-			chains, err := selectChains(cfg.Chains)
+			chains, err := selectChains(cfg, cfg.Chains)
 			if err != nil {
 				return err
 			}
@@ -67,6 +69,45 @@ func indexCmd(f *flags) *cobra.Command {
 	return cmd
 }
 
+// preciosCmd descarga fichas de la cola y guarda sus precios. Es la parte lenta:
+// respeta el ritmo de cada tienda, así que con --limit se puede probar sin
+// esperar horas.
+func preciosCmd(f *flags) *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "precios",
+		Short: "Descarga fichas de la cola y guarda los precios",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cfg := loadConfig(f)
+			chains, err := selectChains(cfg, cfg.Chains)
+			if err != nil {
+				return err
+			}
+			defer closeChains(chains)
+
+			st, err := store.Open(cfg.DBPath)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			if err := seedCatalog(st); err != nil {
+				return err
+			}
+
+			cat := catalog.New(st, loggerFor(cfg))
+			ctx := context.Background()
+			fmt.Printf("Descargando precios de %d cadenas…\n", len(chains))
+			res, err := catalog.NewPricesJob(cat, chains).RunLimited(ctx, limit)
+			fmt.Printf("  %d fichas con precio, %d fallidas, en %s\n",
+				res.Hechos, res.Fallidos, res.Duracion.Round(time.Second))
+			printCounts(st)
+			return err
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 0, "máximo de fichas en esta pasada (0 = la cola entera)")
+	return cmd
+}
+
 // printCounts resume lo que ha quedado guardado.
 func printCounts(st *store.Store) {
 	counts, err := st.CatalogCounts()
@@ -92,7 +133,7 @@ func smokeCmd(f *flags) *cobra.Command {
 		Short: "Descarga una ficha de cada cadena (diagnóstico)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg := loadConfig(f)
-			chains, err := selectChains(cfg.Chains)
+			chains, err := selectChains(cfg, cfg.Chains)
 			if err != nil {
 				return err
 			}

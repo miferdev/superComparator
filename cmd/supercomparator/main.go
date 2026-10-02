@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -107,8 +108,13 @@ func loggerFor(cfg config.Config) *slog.Logger {
 
 // selectChains monta los adaptadores de las cadenas pedidas. Si no se pide
 // ninguna, monta las cuatro del catálogo.
-func selectChains(pedidas []string) ([]chain.Chain, error) {
-	cfg := config.Config{BrowserBin: os.Getenv("SUPERCOMPARATOR_BROWSER_BIN")}
+// selectChains construye los adaptadores de las cadenas pedidas.
+//
+// La configuración se pasa entera y a propósito: Mercadona necesita el código
+// postal para fijar la tienda y su timeout para esperar al render, así que
+// inventarse aquí una config con solo el navegador hacía que sus fichas nunca
+// llegaran ("producto no encontrado" en todas).
+func selectChains(cfg config.Config, pedidas []string) ([]chain.Chain, error) {
 	if len(pedidas) == 0 {
 		pedidas = []string{"mercadona", "ahorramas", "dia", "alcampo"}
 	}
@@ -171,7 +177,27 @@ func runServe(cfg config.Config) error {
 	if _, err := cat.Chains(context.Background()); err != nil {
 		return err
 	}
-	return newServer(cat, st, log, cfg).ListenAndServe(context.Background())
+
+	// Los precios se rellenan en segundo plano: la web tiene que levantar y
+	// poder responder aunque la cola tarde horas. El trabajo vive en la base, así
+	// que si el proceso muere al halfway se reanuda sin perder nada.
+	ctx := context.Background()
+	if precios, err := selectChains(cfg, cfg.Chains); err == nil {
+		job := catalog.NewPricesJob(cat, precios)
+		go func() {
+			res, err := job.Run(ctx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("el trabajo de precios paró", "err", err)
+			}
+			if res.Hechos > 0 || res.Fallidos > 0 {
+				log.Info("trabajo de precios terminado",
+					"fichas", res.Hechos, "fallidas", res.Fallidos, "duracion", res.Duracion)
+			}
+		}()
+		defer closeChains(precios)
+	}
+
+	return newServer(cat, st, log, cfg).ListenAndServe(ctx)
 }
 
 // serveCmd es explícito aunque `serve` ya es lo que hace el comando por defecto.

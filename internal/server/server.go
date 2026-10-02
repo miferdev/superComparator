@@ -43,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cadenas", s.cadenas)
 	mux.HandleFunc("GET /api/catalogo", s.catalogo)
 	mux.HandleFunc("GET /api/producto", s.producto)
+	mux.HandleFunc("GET /api/eventos", s.eventos)
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": version.Stamp()})
 	})

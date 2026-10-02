@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -264,4 +266,61 @@ func (s *Store) CatalogCounts() ([]CatalogCount, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// FichaData escribe el nombre y la categoría definitivos de un producto, los que
+// publica su propia ficha y no su sitemap. El nombre solo se toca si viene
+// informado: un producto con buen nombre de catálogo no debe degradarse a
+// «categoria» porque la ficha no trajera nombre.
+func (s *Store) FichaData(productID int64, name, searchName, category string) (string, string, error) {
+	var nombreActual, categoriaActual string
+	err := s.db.QueryRow(`SELECT name, COALESCE(category, '') FROM products WHERE id = ?`, productID).
+		Scan(&nombreActual, &categoriaActual)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("producto %d no está en el catálogo", productID)
+	}
+	if err != nil {
+		return "", "", err
+	}
+
+	nombre, categoria := nombreActual, categoriaActual
+	if n := strings.TrimSpace(name); n != "" {
+		nombre = n
+	}
+	if cat := strings.TrimSpace(category); cat != "" {
+		categoria = cat
+	}
+	if nombre == nombreActual && categoria == categoriaActual {
+		return nombre, categoria, nil
+	}
+
+	// search_name solo se reescribe si viene informado: si la ficha no trae
+	// nombre, dejarlo como estaba es mejor que sustituir los tokens que ya
+	// tenía por el nombre en crudo.
+	//
+	// Con el nombre de la ficha el producto deja de estar pendiente: DÍÁ los
+	// tenía marcados así porque su sitemap solo traía la categoría.
+	if _, err := s.db.Exec(`
+		UPDATE products
+		SET name = ?,
+		    search_name = CASE WHEN ? <> '' THEN ? ELSE search_name END,
+		    category = ?,
+		    name_source = CASE WHEN ? <> '' THEN 'ficha' ELSE name_source END,
+		    crawl_state = CASE WHEN ? <> '' THEN 'catalogado' ELSE crawl_state END
+		WHERE id = ?`, nombre, searchName, searchName, categoria,
+		strings.TrimSpace(name), strings.TrimSpace(name), productID); err != nil {
+		return "", "", err
+	}
+	return nombre, categoria, nil
+}
+
+// ProductsWithPrice cuenta los productos de una cadena que ya tienen precio, para
+// saber cuánto del catálogo está cubierto. Los que solo tienen precio por medida
+// también cuentan: es un precio publicado, no un dato inventado.
+func (s *Store) ProductsWithPrice(chainID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT count(*) FROM products
+		WHERE chain = ? AND (price > 0 OR measure_price > 0)`, chainID).Scan(&n)
+	return n, err
 }

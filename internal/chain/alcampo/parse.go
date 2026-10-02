@@ -52,8 +52,12 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		if !isProduct(ld.Type) {
 			return true
 		}
-		p.Name = strings.TrimSpace(ld.Name)
-		p.Brand = strings.TrimSpace(ld.Brand.Name)
+		// El JSON-LD es texto plano para el parser de HTML, así que sus entidades
+		// llegan sin desescapar ("Hellmann&#039;s") y se guardan tal cual: hay que
+		// desescaparlas aquí, y solo aquí, porque el resto de la ficha sale del
+		// DOM y viene ya desescapado.
+		p.Name = chain.UnescapeText(strings.TrimSpace(ld.Name))
+		p.Brand = chain.UnescapeText(strings.TrimSpace(ld.Brand.Name))
 		if ld.SKU != "" {
 			p.SKU = ld.SKU
 		}

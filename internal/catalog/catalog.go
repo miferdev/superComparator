@@ -13,25 +13,29 @@ import (
 // Product es la forma de un producto tal como la ve la web: con la etiqueta de
 // la tienda y la fecha en que se comprobó el precio.
 type Product struct {
-	ID            int64     `json:"id"`
-	Chain         string    `json:"cadena"`
-	NombreCadena  string    `json:"nombreCadena"`
-	URL           string    `json:"url"`
-	Nombre        string    `json:"nombre"`
-	SKU           string    `json:"sku"`
-	Formato       string    `json:"formato"`
-	MedidaValor   float64   `json:"medidaValor"`
-	MedidaUnidad  string    `json:"medidaUnidad"`
-	Categoria     string    `json:"categoria"`
-	Precio        float64   `json:"precio"`
-	PrecioBase    string    `json:"precioBase"`
-	PrecioMedida  float64   `json:"precioMedida"`
-	Disponible    bool      `json:"disponible"`
-	PrecioEn      time.Time `json:"precioComprobado"`
-	NombreFuente  string    `json:"nombreFuente"`
-	TienePrecio   bool      `json:"tienePrecio"`
-	PrecioViejo   bool      `json:"precioViejo"`
-	FrescuraHoras int       `json:"frescuraHoras"`
+	ID           int64     `json:"id"`
+	Chain        string    `json:"cadena"`
+	NombreCadena string    `json:"nombreCadena"`
+	URL          string    `json:"url"`
+	Nombre       string    `json:"nombre"`
+	SKU          string    `json:"sku"`
+	Formato      string    `json:"formato"`
+	MedidaValor  float64   `json:"medidaValor"`
+	MedidaUnidad string    `json:"medidaUnidad"`
+	Categoria    string    `json:"categoria"`
+	Precio       float64   `json:"precio"`
+	PrecioBase   string    `json:"precioBase"`
+	PrecioMedida float64   `json:"precioMedida"`
+	Disponible   bool      `json:"disponible"`
+	PrecioEn     time.Time `json:"precioComprobado"`
+	NombreFuente string    `json:"nombreFuente"`
+	TienePrecio  bool      `json:"tienePrecio"`
+	// PrecioSoloMedida es true cuando la tienda solo publica €/kg o €/l (plátanos
+	// a peso, por ejemplo). Entonces no hay precio de unidad y no se puede
+	// sumar al total de la compra, pero el dato existe y hay que enseñarlo.
+	PrecioSoloMedida bool `json:"precioSoloMedida"`
+	PrecioViejo      bool `json:"precioViejo"`
+	FrescuraHoras    int  `json:"frescuraHoras"`
 }
 
 // Chain es una cadena tal como la ve la web: su configuración y cuánto catálogo
@@ -163,23 +167,24 @@ func (c *Catalog) Product(ctx context.Context, chainID, url string) (Product, bo
 
 func toProduct(p store.Product, cadenas map[string]store.Chain, maxHoras int) Product {
 	out := Product{
-		ID:           p.ID,
-		Chain:        p.Chain,
-		NombreCadena: p.Chain,
-		URL:          p.URL,
-		Nombre:       p.Name,
-		SKU:          p.SKU,
-		Formato:      p.Format,
-		MedidaValor:  p.MeasureValue,
-		MedidaUnidad: p.MeasureUnit,
-		Categoria:    p.Category,
-		Precio:       p.Price,
-		PrecioBase:   p.PriceBasis,
-		PrecioMedida: p.MeasurePrice,
-		Disponible:   p.Available,
-		PrecioEn:     p.PriceFetchedAt,
-		NombreFuente: p.NameSource,
-		TienePrecio:  p.Price > 0,
+		ID:               p.ID,
+		Chain:            p.Chain,
+		NombreCadena:     p.Chain,
+		URL:              p.URL,
+		Nombre:           p.Name,
+		SKU:              p.SKU,
+		Formato:          p.Format,
+		MedidaValor:      p.MeasureValue,
+		MedidaUnidad:     p.MeasureUnit,
+		Categoria:        p.Category,
+		Precio:           p.Price,
+		PrecioBase:       p.PriceBasis,
+		PrecioMedida:     p.MeasurePrice,
+		Disponible:       p.Available,
+		PrecioEn:         p.PriceFetchedAt,
+		NombreFuente:     p.NameSource,
+		TienePrecio:      p.Price > 0,
+		PrecioSoloMedida: p.PriceBasis != "" && p.PriceBasis != "unidad" && p.Price <= 0,
 	}
 	if ch, ok := cadenas[p.Chain]; ok && ch.Nombre != "" {
 		out.NombreCadena = ch.Nombre

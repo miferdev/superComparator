@@ -46,14 +46,27 @@ type Product struct {
 	UnitPrice    float64
 	MeasurePrice float64
 	MeasureUnit  string
-	OldPrice     float64
-	PromoText    string
-	Available    bool
-	FetchedAt    time.Time
+	// PriceIsPerMeasure dice que el único precio publicado es por medida (un
+	// €/kg o un €/l tal cual, en productos que la tienda vende al peso). En ese
+	// caso Price vale 0 a propósito: no hay precio de unidad que guardar y no se
+	// inventa. Si hay precio de unidad y además el de la medida, es false.
+	PriceIsPerMeasure bool
+	OldPrice          float64
+	PromoText         string
+	Available         bool
+	FetchedAt         time.Time
 }
 
 func (p Product) HasPromo() bool {
 	return p.OldPrice > p.Price && p.Price > 0
+}
+
+// PrecioEsPorMedida dice cuál de los dos precios publicados es el bueno: true si
+// lo que la tienda publica es un precio por medida y Price está vacío, false si
+// Price es un precio de unidad y MeasurePrice el desglose por kilo o litro.
+// Quien llama no tiene que deducirlo de comparar números.
+func (p Product) PrecioEsPorMedida() bool {
+	return p.PriceIsPerMeasure
 }
 
 // Alternative es un candidato descartado al resolver un producto: sirve para

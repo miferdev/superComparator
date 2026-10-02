@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/miferdev/superComparator/internal/catalog"
 	"github.com/miferdev/superComparator/internal/store"
@@ -189,5 +192,83 @@ func TestRaizSirveHTML(t *testing.T) {
 	defer resp.Body.Close()
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type = %q", ct)
+	}
+}
+
+func TestEventosMandaElEstadoDeLaCola(t *testing.T) {
+	srv := nuevoServidor(t)
+
+	// El stream no se puede leer con get(): hay que leerlo como lo que es, un
+	// texto que va llegando, y quedarse con el primer evento.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/eventos", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+
+	type evento struct {
+		nombre string
+		datos  []byte
+	}
+	lectores := make(chan evento, 1)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		var nombre string
+		for sc.Scan() {
+			linea := sc.Text()
+			switch {
+			case linea == "":
+				if nombre != "" {
+					lectores <- evento{nombre: nombre}
+					return
+				}
+			case strings.HasPrefix(linea, "event: "):
+				nombre = strings.TrimPrefix(linea, "event: ")
+			case strings.HasPrefix(linea, "data: "):
+				select {
+				case lectores <- evento{nombre: nombre, datos: []byte(strings.TrimPrefix(linea, "data: "))}:
+				default:
+				}
+			}
+		}
+		close(lectores)
+	}()
+
+	var estado EstadoCola
+	select {
+	case ev := <-lectores:
+		if ev.nombre != "estado" {
+			t.Fatalf("evento = %q", ev.nombre)
+		}
+		if err := json.Unmarshal(ev.datos, &estado); err != nil {
+			t.Fatalf("datos: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no llegó ningún evento: el stream se quedó colgado")
+	}
+
+	if len(estado.Cadenas) == 0 {
+		t.Fatalf("noreported ninguna cadena: %+v", estado)
+	}
+	var ahorramas *ColaCadena
+	for i := range estado.Cadenas {
+		if estado.Cadenas[i].Cadena == "ahorramas" {
+			ahorramas = &estado.Cadenas[i]
+		}
+	}
+	if ahorramas == nil {
+		t.Fatalf("no viene Ahorramas: %+v", estado.Cadenas)
+	}
+	if ahorramas.Precios != 1 {
+		t.Fatalf("precios de ahorramas = %d, quería 1: %+v", ahorramas.Precios, estado.Cadenas)
 	}
 }

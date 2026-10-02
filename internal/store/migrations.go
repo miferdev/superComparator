@@ -126,6 +126,36 @@ WHERE p.id NOT IN (SELECT rowid FROM products_fts)`,
 			backfillHistorySQL,
 		},
 	},
+	{
+		version: 2,
+		name:    "cola de precios rescatable",
+		// La cola necesita saber cuándo cambió de estado para distinguir una ficha
+		// que se está descargando de una que se quedó a medias al morir el proceso.
+		// La única marca que había era last_error, y no sirve: solo se escribe
+		// cuando algo falla, así que una ficha que pasó a 'descargando' sin
+		// errores previos no dejaría rastro, y otra que falló antes llevaría una
+		// fecha que no es la del atasco. Con updated_at la antigüedad es real.
+		after: func(tx *sql.Tx) error {
+			// NOT NULL con '' como defecto: una fila sin marca se compara por
+			// debajo de cualquier RFC3339, o sea que se da por atascada y se
+			// rescata. Es justo lo que pasa con lo que quedó a medias antes de
+			// esta migración, y el fallo seguro si algún camino olvida marcarla.
+			if err := ensureColumn(tx, "price_queue", "updated_at", "updated_at TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			// Las filas ya en la cola se marcan con su encolado (next_attempt_at).
+			// Las que quedaron en 'descargando' arrastran así toda la antigüedad
+			// que tenían, que es lo que las hace rescatables de inmediato.
+			_, err := tx.Exec(`UPDATE price_queue SET updated_at = next_attempt_at WHERE updated_at = ''`)
+			return err
+		},
+		stmts: []string{
+			// ReclaimStale y QueueStats filtran por state y luego usan la marca del
+			// cambio; idx_queue_state (state, next_attempt_at) sigue sirviendo para
+			// el reparto normal del trabajo.
+			`CREATE INDEX IF NOT EXISTS idx_queue_estado ON price_queue(state, updated_at)`,
+		},
+	},
 }
 
 // backfillHistory empareja el historial del esquema antiguo con el catálogo. Lo

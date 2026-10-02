@@ -63,8 +63,12 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		if !isProduct(ld.Type) {
 			return true
 		}
-		p.Name = strings.TrimSpace(ld.Name)
-		p.Brand = strings.TrimSpace(ld.Brand.Name)
+		// El JSON-LD es texto plano para el parser de HTML, así que sus entidades
+		// llegan sin desescapar ("Hellmann&#039;s") y se guardan tal cual: hay que
+		// desescaparlas aquí, y solo aquí, porque el resto de la ficha sale del
+		// DOM y viene ya desescapado.
+		p.Name = chain.UnescapeText(strings.TrimSpace(ld.Name))
+		p.Brand = chain.UnescapeText(strings.TrimSpace(ld.Brand.Name))
 		if f, ok := chain.ParseJSONNumber(string(ld.Offers.Price)); ok {
 			p.Price = f
 		}
@@ -73,14 +77,22 @@ func ParseProduct(html, url string) (chain.Product, error) {
 		}
 		return false
 	})
-	if p.Name == "" || p.Price <= 0 {
-		return chain.Product{}, errNoProduct
-	}
-
-	// El precio por unidad de DÍA viene en el HTML, con la unidad en mayúsculas.
-	if m, ok := chain.ParseMeasurePrice(doc.Text()); ok {
+	// El precio por unidad de DÍA viene en un elemento aparte del buy-box. Si el
+	// precio publicado lleva la unidad encima (producto vendido al peso), lo
+	// único publicado es ese: Price se deja a 0 en vez de servir el €/kg como si
+	// fuera el de una bolsa.
+	activo := chain.NormalizeSpaces(doc.Find(".buy-box__active-price").First().Text())
+	if m, ok := chain.ParseMeasurePrice(activo); ok {
+		p.Price = 0
+		p.PriceIsPerMeasure = true
 		p.MeasurePrice = m.Value
 		p.MeasureUnit = m.Unit
+	} else if m, ok := chain.ParseMeasurePrice(doc.Find(".buy-box__price-per-unit").First().Text()); ok {
+		p.MeasurePrice = m.Value
+		p.MeasureUnit = m.Unit
+	}
+	if p.Name == "" || (p.Price <= 0 && p.MeasurePrice <= 0) {
+		return chain.Product{}, errNoProduct
 	}
 	p.UnitPrice = p.Price
 
@@ -146,11 +158,9 @@ func categoryNameFromURL(rawURL string) string {
 	segments := strings.Split(categoryFromURL(rawURL), "/")
 	names := make([]string, 0, len(segments))
 	for _, s := range segments {
-		if s != "" {
-			names = append(names, capitalize(chain.HumanizeSlug(s)))
-		}
+		names = append(names, capitalize(chain.HumanizeSlug(s)))
 	}
-	return strings.Join(names, " / ")
+	return chain.CategoryPath(names...)
 }
 
 // capitalize sube la inicial de un nombre de categoría sin tocar el resto.
