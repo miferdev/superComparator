@@ -280,6 +280,11 @@ make up                # docker compose up --build
 Antes de commitear, lo mismo que CI: `gofmt` limpio, `go vet ./...` y
 `go test ./...` en verde.
 
+Quien trabaje en este repositorio (persona o agente de IA) **reparte el trabajo
+entre subagentes y se queda con la integración**; nunca hace una tarea en
+solitario. Las reglas concretas están en
+[AGENTS.md](AGENTS.md#trabaja-siempre-con-agentes-regla-del-proyecto).
+
 ## Documentación
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — mapa de paquetes, regla de dependencias,

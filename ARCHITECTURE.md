@@ -197,6 +197,9 @@ respetar:
 
 ## Reglas del proyecto
 
+- **Se trabaja siempre con agentes.** Ninguna tarea se hace en solitario: reparte
+  el trabajo entre subagentes y quédate con la integración. La forma concreta de
+  hacerlo está en [AGENTS.md](AGENTS.md#trabaja-siempre-con-agentes-regla-del-proyecto).
 - Un concepto por fichero; evitar ficheros de más de ~300 líneas. Nada de
   paquetes `utils`, `common` o `helpers`.
 - Interfaces definidas en el consumidor (idioma Go).

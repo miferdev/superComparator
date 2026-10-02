@@ -192,6 +192,36 @@ Es la regla que más se ha roto en versiones anteriores, así que va explícita:
 - Lo mismo vale para las medidas: si la medida no está publicada, `measure_price`
   es 0 y no se deduce del nombre de la categoría.
 
+## Trabaja siempre con agentes (regla del proyecto)
+
+**Ninguna tarea de este repositorio se hace en solitario: reparte el trabajo
+entre subagentes y quédate con la integración.** Es una decisión del proyecto, no
+una preferencia, así que se aplica igual a tareas pequeñas.
+
+Cómo:
+
+1. **Antes de tocar nada, parte el trabajo** en trozos que no se pisen. Lo
+   habitual es lanzar en paralelo un agente por paquete (`internal/store/`,
+   `internal/chain/`, `internal/server/`…), y reserva para ti las piezas de
+   enganche: el dominio (`internal/catalog/`), el CLI y la verificación final.
+2. **El prompt del agente va con el contrato exacto**: ficheros que puede tocar,
+   firmas de funciones que debe respetar, casos de test que quieres y los tres
+   comandos con los que tiene que terminar en verde (`gofmt`, `go vet`,
+   `go test` de **su** paquete). Explícale el porqué cuando el código no lo diga.
+3. **Los agentes se pisan si les das los mismos ficheros.** Da a cada uno un
+  directorio propio y dilo. Un agente no debe ejecutar `go test ./...` si otro
+   está editando otro paquete: dale su paquete.
+4. **Revisa y corrige lo que devuelvan.** Un agente que termina no significa
+   que esté bien: léete el diff, ejecuta tú los tests y arregla lo que se haya
+   equivocado (nombres, firmas, expectativas del test).
+5. **No te fíes de los números.** Que diga "funciona" no es lo mismo que
+   funcionar; verifícalo tú con `go build`, `go vet`, `go test` y, cuando toque,
+   contra el mundo real.
+
+La documentación también se delega: es un trabajo mecánico y paralelo. Si aun
+así no puedes usar agentes (por ejemplo, si la tarea es una sola edición), al
+menos deja constancia en el resumen del cambio de que se hizo a mano y por qué.
+
 ## Convenciones de código
 
 - `gofmt`, `go vet ./...` y `go test ./...` deben pasar **antes de commitear**
