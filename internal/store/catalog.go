@@ -324,3 +324,34 @@ func (s *Store) ProductsWithPrice(chainID string) (int, error) {
 		WHERE chain = ? AND (price > 0 OR measure_price > 0)`, chainID).Scan(&n)
 	return n, err
 }
+
+// ProductsByURL devuelve los productos cuyas URL están en la lista. Se usa para
+// poner nombre a una lista de precios manuales en una sola consulta en vez de
+// una por precio.
+func (s *Store) ProductsByURL(urls []string) ([]Product, error) {
+	if len(urls) == 0 {
+		return nil, nil
+	}
+	marcadores := make([]string, len(urls))
+	args := make([]any, len(urls))
+	for i, u := range urls {
+		marcadores[i] = "?"
+		args[i] = u
+	}
+	rows, err := s.db.Query(`
+		SELECT id, chain, url, name, format FROM products
+		WHERE url IN (`+strings.Join(marcadores, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Product
+	for rows.Next() {
+		var p Product
+		if err := rows.Scan(&p.ID, &p.Chain, &p.URL, &p.Name, &p.Format); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

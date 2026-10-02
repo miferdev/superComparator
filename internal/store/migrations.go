@@ -156,6 +156,36 @@ WHERE p.id NOT IN (SELECT rowid FROM products_fts)`,
 			`CREATE INDEX IF NOT EXISTS idx_queue_estado ON price_queue(state, updated_at)`,
 		},
 	},
+	{
+		version: 3,
+		name:    "precios puestos a mano",
+		// Un precio que pone el usuario porque la tienda no lo da (Alcampo está
+		// detrás de un WAF) o porque ha visto otro precio en el lineal. Vive en
+		// su propia tabla y no se mezcla con products.price: el precio web nunca
+		// lo pisa y el manual nunca lo pisa a él, porque no son el mismo dato.
+		//
+		// El precio por unidad va a 0 a propósito cuando solo hay precio por
+		// medida, igual que en products: un producto vendido al peso no tiene
+		// precio de unidad y deducirlo sería inventarlo.
+		stmts: []string{
+			// La clave primaria es (chain, product_url) porque un producto se
+			// identifica así en todo el catálogo. El FOREIGN KEY compuesto
+			// comprueba que el producto exista (products tiene UNIQUE(chain, url),
+			// que es la clave padre que necesita) y hace que un producto borrado
+			// se lleve su precio manual con él.
+			`CREATE TABLE IF NOT EXISTS precios_manuales (
+  chain            TEXT NOT NULL REFERENCES chains(id),
+  product_url      TEXT NOT NULL,
+  precio           REAL NOT NULL DEFAULT 0,
+  precio_medida    REAL NOT NULL DEFAULT 0,
+  medida           TEXT NOT NULL DEFAULT '',
+  nota             TEXT NOT NULL DEFAULT '',
+  actualizado      TEXT NOT NULL,
+  PRIMARY KEY (chain, product_url),
+  FOREIGN KEY (chain, product_url) REFERENCES products(chain, url) ON DELETE CASCADE
+)`,
+		},
+	},
 }
 
 // backfillHistory empareja el historial del esquema antiguo con el catálogo. Lo

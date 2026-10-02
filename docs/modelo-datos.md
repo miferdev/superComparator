@@ -35,8 +35,15 @@ en `internal/store/migrate.go`. Estas notas explican el diagrama y el diccionari
                   +------------------+                  |
                                                          |
                   +------------------+                  |
+                                                         |
+                  +------------------+                  |
+                  | PRECIOS_MANUALES |<-----------------1
+                  | (precio a mano)  |  0..1 por producto
+                  +------------------+                  |
+                                                         |
+                  +------------------+                  |
                   |    LIST_ITEMS    |<-----------------1
-                  |    (mi lista)    |
+                  |   (mi compra)    |
                   +------------------+
 
                   +------------------+
@@ -98,9 +105,18 @@ PRICE_HISTORY ------------------------------------------------------------
 LIST_ITEMS ----------------------------------------------------------------
   id               PK   int
   product_id       FK   int      -> PRODUCTS.id   (un producto, una vez)
-  quantity             int
+  quantity             real     cuantas unidades (1,5 kg es legal)
   position             int
   added_at             datetime
+
+PRECIOS_MANUALES (migración 3) -------------------------------------------
+  chain            PK FK text      -> CHAINS.id
+  product_url      PK FK text      -> PRODUCTS.url  (FK compuesta, ON DELETE CASCADE)
+  precio                real      precio de unidad que ha puesto el usuario
+  precio_medida         real      por kg o l, si se ha puesto
+  medida                text      kg | l | ""  (nada más se guarda)
+  nota                  text      de dónde sale ("precio del lineal")
+  actualizado           datetime  cuándo lo escribió el usuario
 
 CRAWL_STATE --------------------------------------------------------------
   chain            PK FK text      -> CHAINS.id
@@ -154,9 +170,36 @@ PRODUCTS_FTS (tabla virtual de FTS5) -------------------------------------
   cadena (dónde se quedó, cuánto hizo, si está pausada); `runs` es el historial de
   ejecuciones (`catalogo` o `precios`) que alimenta `GET /api/estado`. `SetPrice`
   no se llama desde el indexador: el indexador solo cataloga y encola.
-- **`LIST_ITEMS` está creada pero sin usar.** La tabla de «Mi lista» existe (con
-  `UNIQUE(product_id)`, para no añadir dos veces lo mismo) pero todavía no hay
-  ningún endpoint ni worker que la toque; es de la fase 2.
+- **`LIST_ITEMS` es «Mi compra», y ya tiene API.** Se creó en la migración 1 y
+  durante un tiempo no la tocaba nadie; hoy la usan `store.AddToList`,
+  `SetListQuantity`, `RemoveFromList`, `ClearList` y `ListaCompra`, que son los que
+  están detrás de `/api/mi-compra`. `UNIQUE(product_id)` está para no añadir dos
+  veces lo mismo: un producto que ya está en la lista cambia de cantidad, y eso se
+  dice con un error, no sumando por sorpresa. `quantity` se maneja como número
+  real aunque la columna se crease como `INTEGER`: `1,5` kg de plátanos es una
+  cantidad legítima.
+- **La línea de `LIST_ITEMS` no guarda precio: lo resuelve en el momento de
+  leerla.** `store.ListaCompra` junta `list_items` con `products` y con
+  `precios_manuales` y trae ya el precio efectivo con el `CASE WHEN`: si hay
+  precio manual, ese manda sobre el de la tienda, tanto en `precio` como en
+  `precio_medida`. El precio que se ve, en `list_items` no está, así que
+  borrarlo no puede desincronizar nada y cambiarlo se nota en la siguiente
+  lectura.
+- **`PRECIOS_MANUALES` es un dato de otra fuente y por eso va en su propia
+  tabla.** Alcampo está detrás de un WAF que responde 403, así que el usuario
+  escribe a mano el precio que ve en el tienda. Ni `products.price` ni
+  `price_history` se tocan al guardarlo: un dato puesto por una persona no puede
+  pasar por dato de la web, ni al revés. Por eso tampoco hay
+  `precio_history` de precios manuales: su rastro es `actualizado`.
+- **`PRECIOS_MANUALES` está atada a `PRODUCTS` por `(chain, product_url)`**, que
+  es la `UNIQUE(chain, url)` del catálogo, con `ON DELETE CASCADE`. Consecuencia
+  práctica: un precio manual solo puede existir para un producto real del
+  catálogo (`store.SetPrecioManual` lo comprueba antes de escribir) y, si el
+  producto se borra, el precio manual se va con él en vez de quedarse hablando de
+  una ficha que ya no existe.
+- **La clave de `PRECIOS_MANUALES` es `(chain, product_url)`, no `product_id`**
+  para no tener una segunda manera de identificar un producto en el esquema: es
+  el mismo par que usa `products` y que llega en la URL de la API.
 - **Marcas de tiempo como texto RFC3339 en UTC** (`store.ts`): se comparan y se
   ordenan en SQL, así que todas tienen que llevar la misma zona.
 - **`price_history` conserva columnas del esquema antiguo** (`chain`,
@@ -213,3 +256,31 @@ propia transacción; una migración ya aplicada no se toca. Las filas que ya est
 en la cola se marcan con su `next_attempt_at`, y las que quedaron en
 `descargando` arrastran así toda la antigüedad que tenían: es justo lo que las
 hace rescatables de inmediato.
+
+## Migración 3: `precios_manuales`
+
+Crea una sola tabla, `precios_manuales`, y **no toca `list_items`**: esa tabla ya
+existía desde la migración 1 y lo único que le faltaba eran los endpoints, que son
+código y no esquema.
+
+La tabla existe por Alcampo. Su catálogo se lee muy bien (89.615 productos) pero
+las fichas están detrás de un WAF que responde 403 a los clientes automatizados, así
+que no sale ningún precio de él y **no se intenta saltarse ese WAF**. Para poder
+saber cuánto costaría la compra en esa tienda, el usuario escribe el precio que ve
+en el lineal. La tabla recoge ese dato, con dos reglas que no son de estilo sino de
+sentido:
+
+- **No se mezcla con el precio de la tienda.** Ni `products.price` ni
+  `price_history` se tocan al guardar un precio manual, ni al revés. Son fuentes
+  distintas y el esquema las mantiene separadas para que no se confundan: un `0`
+  en `products.price` significa «la tienda no publica precio», no «el precio está
+  en otra tabla».
+- **Solo para productos que existen.** La FK compuesta `(chain, product_url) →
+  products(chain, url)` hace las dos cosas de una vez: impide guardar un precio
+  para una ficha que no está en el catálogo (que es un error con mensaje en
+  español, no una fila huérfana) y hace que al borrar el producto se borre su
+  precio manual.
+
+Como el resto del esquema, esto se aplica con una migración versionada en
+`schema_migrations` y en su propia transacción; `migración 3 (precios puestos a
+mano)`.

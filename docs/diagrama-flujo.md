@@ -127,30 +127,39 @@ está construida hoy**, porque la SPA todavía no existe.
    Abres un producto
             |
             v
-   +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
-   |  ¿Su precio tiene mas de 24 horas?                          |
+   +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+   |  ¿Su precio tiene mas de 24 horas?                           |
    |                                                              |
-   |  NO                          SI                             |
+   |  NO                          SI                              |
    |     |                         |                              |
    |     v                         v                              |
    |  Muestra el precio        Se comprueba ahora mismo           |
-   |  guardado                   (el SSE avisa del progreso      |
-   |     |                        de la cola, no de esto)          |
+   |  guardado                   (NO HECHO: el SSE solo avisa     |
+   |     |                        del progreso de la cola)        |
    |     +-------------+---------------+                          |
    |                   v                                          |
-   |          Muestra precio, medida y enlace                      |
+   |          Muestra precio, medida y enlace                     |
+   |          y de donde viene el precio (precioFuente)           |
    |                   |                                          |
-   |                   v                                          |
-   |          Ves el mismo producto en otras tiendas               |
-   |                   |                                          |
-   |                   v                                          |
-   |              Comparas y eliges                               |
-   |                   |                                          |
-   |                   v                                          |
-   |          Lo anades a "Mi lista"                               |
-   |                   |                                          |
-   |                   v                                          |
-   |          Subtotal por tienda y total                          |
+   |          +--------+---------+                                |
+   |          |                  |                                |
+   |          v                  v                                |
+   |  ¿La tienda no publica    Lo anades a "Mi compra"            |
+   |  precio? (Alcampo,        (POST /api/mi-compra)              |
+   |  detras de su WAF)              |                            |
+   |          |                      v                            |
+   |          v             Subtotal por tienda y total           |
+   |  Escribes el precio     (el total solo suma precios de       |
+   |  a mano: manda en su     unidad; lo vendido al peso va       |
+   |  subtotal y sale como    aparte, con su sinPrecio y su       |
+   |  "manual"                avisoTotal)                         |
+   |  (PUT /api/precios-             |                            |
+   |   manuales)                     v                            |
+   |          |              Ves el mismo producto en otras       |
+   |          +------------> tiendas: NO HECHO                    |
+   |                                 |                            |
+   |                                 v                            |
+   |                          Comparas y eliges                   |
    +--------------------------------------------------------------+
 ```
 
@@ -245,19 +254,37 @@ se quedan en la cola, que es justo donde deben estar.
 ### Caja 3 — Lo que haces en la web
 
 Hoy la web es una página HTML mínima que lista la API, y lo que funciona de todo
-el recorrido es la primera mitad: buscar y filtrar (`GET /api/catalogo`, con FTS5
-y paginación), ver un producto (`GET /api/producto`), ver el estado de cada cadena
-(`GET /api/cadenas`, `GET /api/estado`) y **seguir el progreso de la cola en vivo**
-con `GET /api/eventos`: es un stream de Server-Sent Events que manda un evento
-`estado` cada 2 segundos con, por cadena, `pendiente`, `descargando`, `error` y
-`precios`. Se lee de la base, así que lo que ve la web es lo que de verdad se ha
-descargado.
+el recorrido es: buscar y filtrar (`GET /api/catalogo`, con FTS5 y paginación), ver
+un producto (`GET /api/producto`), ver el estado de cada cadena (`GET /api/cadenas`,
+`GET /api/estado`) y **seguir el progreso de la cola en vivo** con
+`GET /api/eventos`: es un stream de Server-Sent Events que manda un evento `estado`
+cada 2 segundos con, por cadena, `pendiente`, `descargando`, `error` y `precios`.
+Se lee de la base, así que lo que ve la web es lo que de verdad se ha descargado.
 
 La API ya marca los precios viejos (`precioViejo` + `frescuraHoras`, contra
 `precio_max_horas` de la cadena), que es la señal que usará la SPA para pedir una
 comprobación al momento.
 
+**Los precios que pone el usuario.** La tienda no siempre da precio: Alcampo está
+detrás de un WAF que responde 403, así que sus fichas están catalogadas pero sin
+precio y no se intenta saltarse ese WAF. Para eso está `PUT /api/precios-manuales`:
+el usuario escribe el precio que ve en la tienda y ese dato se guarda en
+`precios_manuales`, **en su propia tabla**: ni `products.price` ni `price_history`
+se tocan, porque un dato puesto por una persona no puede pasar por dato de la web.
+Antes de guardar se valida (que el producto exista, que haya precio de unidad o de
+medida, y que la medida sea `kg` o `l`) y, si algo no cuadra, se devuelve el error
+sin escribir nada. A partir de ahí el precio manual se ve en cualquier lectura y la
+línea sale con `precioFuente: "manual"`.
+
+**Mi compra.** `list_items` (que existía vacía desde la migración 1) ya tiene API:
+`GET/POST/PUT/DELETE /api/mi-compra`. Lo que se guarda es qué productos y con qué
+cantidad; **el precio de cada línea se resuelve al leer** en `store.ListaCompra`,
+que es donde el precio manual sustituye al de la tienda. El total **solo suma
+precios de unidad**: lo vendido al peso (1,65 €/kg) no tiene precio de unidad y de
+un €/kg no se puede saber cuánto cuesta una bolsa, así que esas líneas **no se
+estiman**, se cuentan aparte en `sinPrecio` y `sinPrecioDetalle`, con un `avisoTotal`
+que lo explica (`sinPrecio` cuenta toda línea con precio <= 0, así que también
+entra lo que aún no tiene precio). Cantidad 0 o menor quita el producto.
+
 Lo que **no** existe todavía: la SPA de Angular, la recomprobación en vivo de un
-precio viejo, la vista «el mismo producto en otras tiendas», la selección entre
-cadenas y «Mi lista» con subtotales (la tabla `list_items` está creada y vacía,
-sin endpoints).
+precio viejo y la vista «el mismo producto en otras tiendas».

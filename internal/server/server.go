@@ -44,6 +44,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/catalogo", s.catalogo)
 	mux.HandleFunc("GET /api/producto", s.producto)
 	mux.HandleFunc("GET /api/eventos", s.eventos)
+	// Cada método, su propio patrón: en ServeMux 1.22+ un "GET /api/x" no
+	// atiende un DELETE, así que borrados y consultas van por separado.
+	mux.HandleFunc("GET /api/mi-compra", s.miCompra)
+	mux.HandleFunc("POST /api/mi-compra", s.anadirALaCompra)
+	mux.HandleFunc("PUT /api/mi-compra", s.cambiarCantidad)
+	mux.HandleFunc("DELETE /api/mi-compra", s.quitarDeLaCompra)
+	mux.HandleFunc("GET /api/precios-manuales", s.preciosManuales)
+	// POST es alias de PUT: guardar un precio es un alta o una edición según
+	// exista, y es lo mismo. Sin esto, un POST caería en el handler raíz y
+	// devolvería la página de inicio en vez de un error claro.
+	mux.HandleFunc("PUT /api/precios-manuales", s.guardarPrecioManual)
+	mux.HandleFunc("POST /api/precios-manuales", s.guardarPrecioManual)
+	mux.HandleFunc("DELETE /api/precios-manuales", s.borrarPrecioManual)
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": version.Stamp()})
 	})
@@ -159,6 +172,8 @@ func (s *Server) raiz(w http.ResponseWriter, r *http.Request) {
 <ul>
 <li><a href="/api/cadenas">/api/cadenas</a> — cadenas y cuánto catálogo hay</li>
 <li><a href="/api/catalogo?q=leche">/api/catalogo?q=leche</a> — buscar productos</li>
+<li><a href="/api/mi-compra">/api/mi-compra</a> — la compra y su total</li>
+<li><a href="/api/precios-manuales">/api/precios-manuales</a> — precios puestos a mano</li>
 <li><a href="/api/estado">/api/estado</a> — estado del sistema</li>
 </ul>
 <p>Versión: %s</p>

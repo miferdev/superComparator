@@ -8,11 +8,14 @@ código**: actualiza este fichero en el mismo cambio.
 
 SuperComparator indexa los catálogos de **Mercadona, Ahorramas, DÍA y Alcampo**
 en una base SQLite (`datos/catalogo.db`) y sirve una **API JSON** en
-`127.0.0.1:8080` para buscar productos y comparar precios. Ya **no** hay lista
-de la compra ni informes markdown: `lista.md`, `lista.ejemplo.md` y los
-`datos/*.md` son restos de la versión anterior y **nada los lee ni los escribe**.
-No borres código de Go por tu cuenta, pero tampoco los menciones como
-funcionalidad: no existen. La SPA de Angular es la fase 2.
+`127.0.0.1:8080` para buscar productos, comparar precios y llevar una **«Mi
+compra»** (`list_items`) con subtotales y total, con precios que el usuario puede
+**poner a mano** (`precios_manuales`) cuando la tienda no los da. Lo que **no**
+existe es la resolución automática de una compra ni los informes markdown:
+`lista.md`, `lista.ejemplo.md` y los `datos/*.md` son restos de la versión
+anterior y **nada los lee ni los escribe**. No borres código de Go por tu cuenta,
+pero tampoco los menciones como funcionalidad: no existen. La SPA de Angular es la
+fase 2.
 
 Documentos de referencia: `README.md` (uso),
 [ARCHITECTURE.md](ARCHITECTURE.md) (diseño y decisiones),
@@ -92,7 +95,10 @@ sin `--build` reutiliza la imagen anterior: usa `--build` (o `make up`).
 - `server` solo importa `catalog`, `store` y `version`. **La API no habla con
   ninguna tienda**: si un handler necesita algo que no está en la base, se
   escribe un comando (`crawl`), no un endpoint que baje a la red. El SSE
-  (`GET /api/eventos`) lee la cola de la base, que es donde vive.
+  (`GET /api/eventos`) lee la cola de la base, que es donde vive. Lo mismo vale
+  para `/api/mi-compra` y `/api/precios-manuales`: hablan con `catalog`, que es
+  quien traduce a DTO, y de ahí a la base. Nada de tocar la red para poner un
+  precio a mano.
 - `catalog` es el único que conoce `chain` + `match` + `store` a la vez
   (`indexer.go` indexa, `catalog.go` consulta y traduce a DTO, `prices.go` es el
   trabajo de precios).
@@ -121,6 +127,16 @@ sin `--build` reutiliza la imagen anterior: usa `--build` (o `make up`).
   lista de la compra: **solo tienen tests**, no los llames desde código nuevo sin
   una razón clara (y si esa razón es la comparación entre cadenas de la fase 2,
   es justo para lo que sirven).
+- **El precio que pone el usuario va a su propia tabla** (`precios_manuales`, y su
+  API `/api/precios-manuales`): ni `products.price` ni `price_history` se tocan al
+  guardarlo, ni al revés. Un dato puesto por una persona no puede pasar por dato de
+  la web. No escribas código que los mezcle.
+- **Los errores de la lista y de los precios a mano se separan del fallo del
+  servidor** en `writeErrDominio` (`internal/server/dominio.go`): 404 para «no
+  está en el catálogo» / «no está en la lista», 400 para el resto de errores de
+  dominio y **500 para lo que no sea un error de petición**. Reconoce los mensajes
+  conocidos de `store` y deja pasar el resto como 500, para no disfrazar un fallo
+  de SQLite de petición mala.
 - `store/prices.go` es **herencia** del esquema de la lista: `LastMatchPrices`
   consulta una tabla `matches` que ya no existe. No escribas ahí; si tocas el
   esquema, decide antes si eso se borra.
@@ -174,7 +190,10 @@ sin `--build` reutiliza la imagen anterior: usa `--build` (o `make up`).
   (`cola de precios rescatable`) añade `price_queue.updated_at` y su índice
   `idx_queue_estado`: sin esa marca no hay forma de distinguir una ficha que se
   está descargando de una que se quedó a medias al morir el proceso
-  (`last_error` no sirve: solo se escribe cuando algo falla).
+  (`last_error` no sirve: solo se escribe cuando algo falla). La 3 (`precios
+  puestos a mano`) crea `precios_manuales`, con FK compuesta a
+  `products(chain, url)`: **no toca `list_items`**, que ya existía desde la
+  migración 1 y lo único que le faltaba eran endpoints.
 - `products_fts` la mantienen **triggers**, no Go. Ni un `INSERT` en
   `products_fts` desde el código: un trigger lo borraría. Para indexar otro
   campo, migración nueva (tabla virtual + triggers + el `backfill` que rellene lo
@@ -228,6 +247,66 @@ siguen siendo las mismas:
   cada 2 s con, por cadena, `pendiente`, `descargando`, `error` y `precios`. Es
   un stream que se abre una vez; lee la cola de la base, no al bucle.
 
+## El precio que pone el usuario (Alcampo está detrás de un WAF)
+
+**Alcampo está detrás de un WAF que devuelve 403 a los clientes automatizados**, así
+que sus 89.615 fichas están catalogadas pero sin precio y no se puede ni debe
+intentar saltar el WAF. Para poder saber cuánto costaría la compra en Alcampo, el
+usuario **escribe el precio a mano** cuando lo ve en la tienda. Lo mismo vale para
+cualquier otro precio que haya visto en el lineal. Reglas:
+
+- Vive en `precios_manuales` y **no se mezcla con el de la tienda**: ni
+  `products.price` ni `price_history` se tocan al guardarlo, ni al revés. Un `0` en
+  `products.price` sigue significando «la tienda no publica precio», no «está en
+  otra tabla».
+- Se identifica por `(chain, url)` con FK a `products`, así que un precio manual
+  solo existe para un producto real del catálogo y, si el producto se borra, se
+  borra con él (`ON DELETE CASCADE`).
+- **`SetPrecioManual` valida antes de escribir**: el producto tiene que existir;
+  tiene que haber precio de unidad o precio de medida; y la medida solo puede ser
+  `kg` o `l`. Si algo falla, lo dice y no guarda nada. Es preferible que el usuario
+  se entere a que se guarde un precio sin sentido.
+- **Un precio manual cuenta como recién escrito**: el producto no sale como
+  caducado (`precioViejo`) aunque el precio de la tienda sea viejo, porque el dato
+  se acaba de escribir.
+- El DTO de producto lleva `precioFuente`: `web` (lo sacamos de la tienda),
+  `manual` (lo puso el usuario) y `ninguno`. **Ojo con `ninguno`**: describe de
+  dónde sale **el precio de unidad que se enseña y se suma**, así que un producto
+  vendido al peso sale con `ninguno` aunque su €/kg venga de la web, porque no hay
+  precio de unidad que enseñar. Documentarlo como «no hay precio de ningún tipo»
+  sería falso.
+
+## «Mi compra»: el total solo suma precios de unidad
+
+`list_items` (que existía vacía desde la migración 1) ya tiene API
+(`/api/mi-compra`). Lo que se guarda es qué productos y con qué cantidad; el
+precio de cada línea se resuelve al leer, en `store.ListaCompra`.
+
+- **El total solo suma precios de unidad.** Lo vendido al peso (plátanos a 1,65
+  €/kg) no tiene precio de unidad: su `price` está a 0 **a propósito** y de un €/kg
+  no se puede saber cuánto cuesta una bolsa. Por eso esas líneas van aparte, en
+  `sinPrecio` y `sinPrecioDetalle`, **en vez de estimarlas**: multiplicar el €/kg
+  por una cantidad inventada daría un total falso, y un total falso es peor que un
+  total con huecos.
+- **`sinPrecio` cuenta toda línea con precio <= 0**, así que también entra lo que
+  todavía no tiene precio (una ficha de Alcampo sin precio escrito, o una que la
+  cola aún no ha descargado). No es solo «lo vendido al peso».
+- La respuesta lleva `avisoTotal`: un texto corto que explica que el total no
+  incluye esas líneas y por qué. Si `sinPrecio` es 0, `avisoTotal` va vacío.
+- `subtotalPorCadena` solo trae las tiendas con algo sumable, ordenado de mayor a
+  menor.
+- **El precio manual manda en el subtotal**: si el usuario puso un precio a mano,
+  ese es el que suma, y la línea sale con `precioFuente: "manual"`.
+- Cantidad 0 o negativa **quita** el producto de la lista, y lo decide
+  `catalog.CambiarCantidad`, no el handler.
+- Los totales se redondean a céntimos en `catalog`, no en `store`: son sumas de
+  flotantes y sin redondear un total que se enseña como dinero saldría como
+  `5.6000000000000005`.
+
+Que la cantidad llegue como `*float64` en `POST` es a propósito: ausente significa
+1 (el botón de «añadir») y un 0 explícito significa quitar. En `PUT`, cantidad
+ausente es error, porque un `PUT` sin cantidad no puede querer decir «quítalo».
+
 ## Un producto dudoso no entra en la comparativa
 
 Es la regla que más se ha roto en versiones anteriores, así que va explícita:
@@ -264,6 +343,11 @@ Es la regla que más se ha roto en versiones anteriores, así que va explícita:
   informes, la traducción es «no aparece como ganador ni en subtotales».
 - Lo mismo vale para las medidas: si la medida no está publicada, `measure_price`
   es 0 y no se deduce del nombre de la categoría.
+- **Un precio manual no es un precio dudoso, pero tampoco es un precio de la
+  tienda.** Viene de una persona y eso lo hace legítimo, pero tiene que seguir
+  siendo visible como lo que es: por eso va a su tabla y por eso el DTO dice
+  `precioFuente: "manual"`. Lo que no vale es dejarlo pasar por dato de la web ni
+  rellenarlo cuando no hay ninguno.
 
 ## Desescapar y parsear: cada formato con su función
 
@@ -331,8 +415,8 @@ menos deja constancia en el resumen del cambio de que se hizo a mano y por qué.
 ## Lo que no existe todavía (no lo prometas ni lo des por hecho)
 
 La SPA de Angular, la recomprobación de precios viejos al abrir un producto, la
-vista «el mismo producto en otras tiendas», «Mi lista» con subtotales
-(`list_items` está creada y vacía, sin endpoints) y el reanudar del indexado
-desde `crawl_state` (hoy `crawl index` relee el sitemap entero; que sea
-idempotente es lo que lo hace seguro). La tabla de fases está en
-[ARCHITECTURE.md](ARCHITECTURE.md).
+vista «el mismo producto en otras tiendas» y el reanudar del indexado desde
+`crawl_state` (hoy `crawl index` relee el sitemap entero; que sea idempotente es
+lo que lo hace seguro). **«Mi compra» (`list_items`) ya está**: tiene API,
+subtotales y total; lo que no hay es la interfaz que la use, porque la SPA es la
+fase 2. La tabla de fases está en [ARCHITECTURE.md](ARCHITECTURE.md).

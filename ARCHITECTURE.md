@@ -10,11 +10,11 @@ no.
 ```
 cmd/supercomparator/   CLI: serve (por defecto), crawl index, crawl precios, smoke, version
 internal/
-  catalog/              indexer.go (indexa sitemaps) + catalog.go (consultas y DTO) + prices.go (trabajo de precios)
+  catalog/              indexer.go (indexa sitemaps) + catalog.go (consultas y DTO) + fase3.go (mi compra y precios a mano) + prices.go (trabajo de precios)
   chain/                puerto Chain + browser/ + mercadona/ + ahorramas/ + dia/ + alcampo/
   match/                normalización y lematización (puro, sin red)
-  store/                SQLite: migrations.go, catalog.go, search.go, queue.go, priceloop.go, priceritmo.go, pricing.go, crawl.go, runs.go, prices.go
-  server/               HTTP + JSON
+  store/                SQLite: migrations.go, catalog.go, search.go, queue.go, priceloop.go, priceritmo.go, pricing.go, crawl.go, runs.go, lista.go, manual.go, prices.go
+  server/               HTTP + JSON: server.go (rutas), micompra.go, preciosmanuales.go, dominio.go (errores)
   version/              versión y commit
   config/               env
 ```
@@ -41,7 +41,10 @@ Las flechas van en un solo sentido y no hay ciclos. Los detalles que importan:
 - **`server` solo depende de `catalog`, `store` y `version`.** Es la regla que
   sostiene la separación: la API **no** conoce ningún adaptador de tienda. Un
   endpoint no puede bajarse a la red; si necesita un dato, o no está en la base,
-  o se escribe un comando nuevo que sí use `chain`.
+  o se escribe un comando nuevo que sí use `chain`. «Mi compra» y los precios a
+  mano (`micompra.go`, `preciosmanuales.go`) son el ejemplo de lo que sale de esa
+  regla: no hablan con ninguna tienda, solo leen y escriben en la base a través de
+  `catalog`, que es quien traduce a DTO.
 - **`catalog` es el orquestador**: usa `chain` para leer catálogos, `match` para
   normalizar nombres y `store` para guardar. Es el único paquete que conoce las
   tres cosas.
@@ -106,7 +109,21 @@ Las flechas van en un solo sentido y no hay ciclos. Los detalles que importan:
    `store.Search` (FTS5 o `LIKE`) → `catalog.toProduct`, que añade lo que la web
    necesita y no está en la tabla: el nombre comercial de la cadena
    (`nombreCadena`), `tienePrecio`, `precioSoloMedida`, `precioViejo` y
-   `frescuraHoras` contra el `precio_max_horas` de esa cadena.
+   `frescuraHoras` contra el `precio_max_horas` de esa cadena, y `precioFuente`,
+   que sale de mirar si esa ficha tiene un precio puesto a mano.
+5. **Precios a mano** (`PUT /api/precios-manuales`): `server` valida el cuerpo y
+   `catalog.SetPrecioManual` lo pasa a `store.SetPrecioManual`, que **valida antes
+   de escribir** y guarda en `precios_manuales`. Ni `products` ni `price_history`
+   se tocan. A partir de ahí el precio manual se ve en cualquier lectura: la
+   búsqueda lo resuelve para todos los resultados de golpe (una consulta, no una
+   por producto) y `GET /api/producto` lo pone por delante del de la tienda.
+6. **Mi compra** (`/api/mi-compra`): `catalog` llama a `store` (`AddToList`,
+   `SetListQuantity`, `RemoveFromList`, `ClearList`, `ListaCompra`) y traduce la
+   lista a DTO. El precio efectivo de cada línea se resuelve **en SQL**, en la
+   misma consulta de `ListaCompra`, con un `CASE WHEN` sobre `precios_manuales`:
+   si hay precio manual, ese es el que suma. Los totales se redondean a céntimos en
+   `catalog`, no en `store`, porque son sumas de flotantes y sin redondear un total
+   que se enseña como dinero saldría como `5.6000000000000005`.
 
 El trabajo de precios no bloquea nada: `serve` lo lanza en segundo plano con
 `catalog.NewPricesJob(...).Run(ctx)`, así que la web levanta y responde mientras
@@ -211,6 +228,93 @@ precio. Y `chain.UnescapeText` solo se aplica al texto crudo del JSON-LD, nunca
 al del DOM, que `net/html` ya viene desescapado. Las reglas completas están en
 [AGENTS.md](AGENTS.md#desescapar-y-parsear-cada-formato-con-su-función).
 
+Y el precio que pone el usuario **no corrige** el de la tienda: es otro dato, de
+otra fuente, que vive en su propia tabla (ver «El precio que pone el usuario, al
+lado del de la tienda»).
+
+## El precio que pone el usuario, al lado del de la tienda
+
+Son dos fuentes y no se mezclan. Alcampo está detrás de un WAF que responde 403 a
+los clientes automatizados, así que sus 89.615 fichas están catalogadas pero sin
+precio y **no se intenta saltarse ese WAF**: la solución es que el usuario escriba
+a mano el precio que ve en la tienda. Lo mismo sirve para un precio que haya visto
+en el lineal y no esté en la web.
+
+De ahí salen las cuatro decisiones que explican el resto del diseño:
+
+- **Tabla propia (`precios_manuales`, migración 3).** Ni `products.price` ni
+  `price_history` se tocan al guardar un precio a mano, ni al revés: un dato puesto
+  por una persona no puede pasar por dato de la web. También significa que un `0`
+  en `products.price` sigue significando «la tienda no publica precio», y no «el
+  precio está en otro sitio». El precio manual no tiene `price_history`: su rastro
+  es su propia marca de tiempo.
+- **Identidad `(chain, url)` con FK a `products`.** Un precio manual solo puede
+  existir para un producto real del catálogo —`store.SetPrecioManual` lo comprueba
+  y, si no está, lo dice en vez de dejar una fila huérfana— y, si el producto se
+  borra, se borra con él (`ON DELETE CASCADE`). Es la misma identidad que usa el
+  catálogo entero, no una segunda forma de nombrar un producto.
+- **Valida antes de escribir.** Tiene que haber precio de unidad o precio de
+  medida, y la medida solo puede ser `kg` o `l` (un «€ por bolsa» no se puede
+  comparar con un €/kg). Si algo no cuadra, se devuelve el error y no se escribe
+  nada: es preferible que el usuario se entere a que se guarde un precio a medias
+  creyendo que sí.
+- **Cuenta como recién escrito.** `aplicaPrecioManual` (`catalog`) pone
+  `precioComprobado` a la marca del precio manual y `frescuraHoras` a 0, así que
+  el producto no sale como `precioViejo` aunque el precio de la tienda sea viejo:
+  el dato se acaba de escribir, está fresco por definición.
+
+`precioFuente` dice de dónde sale el precio **de unidad** que se enseña y se suma:
+`web`, `manual` o `ninguno`. El matiz de `ninguno` importa: **no** significa «no hay
+ningún precio», sino «no hay precio de unidad». Un producto vendido al peso sale
+con `ninguno` aunque su €/kg venga de la web, porque no hay precio de unidad que
+enseñar ni que sumar.
+
+## «Mi compra»: qué suma el total y qué no
+
+`list_items` solo guarda qué productos y con qué cantidad. **El precio de una línea
+no está en la lista**: se resuelve al leer, en `store.ListaCompra`, juntando
+`list_items` con `products` y con `precios_manuales`. Consecuencias que no son de
+estilo:
+
+- El precio manual **manda** sobre el de la tienda para el subtotal de su línea, y
+  la línea lo dice (`precioFuente: "manual"`), porque un total que mezcla las dos
+  fuentes sin avisar no se puede leer.
+- **El total solo suma precios de unidad.** Lo vendido al peso (plátanos a 1,65
+  €/kg) no tiene precio de unidad: su `price` está a 0 **a propósito** y de un €/kg
+  no se puede saber cuánto cuesta una bolsa. Esas líneas no se estiman, se cuentan
+  aparte: multiplicar el €/kg por una cantidad inventada daría un total falso, y
+  **un total falso es peor que un total con huecos**. `SinPrecio` las cuenta,
+  `sinPrecioDetalle` las nombra y `avisoTotal` lo explica en una frase (vacío cuando
+  no hay ninguna).
+- `SinPrecio` cuenta **toda línea con precio <= 0**, así que no es solo «lo vendido
+  al peso»: también entra lo que todavía no tiene precio (una ficha de Alcampo sin
+  precio escrito, o una que la cola aún no ha descargado). Documentarlo como «solo
+  lo vendido al peso» sería falso.
+- `subtotalPorCadena` solo trae las tiendas con algo sumable, ordenado de mayor a
+  menor, que es como lo pinta una web; una tienda con líneas al peso y líneas con
+  precio aparece con la parte sumable y sin el resto.
+- **Cantidad 0 o menor quita el producto**, y lo decide `catalog.CambiarCantidad`
+  (que llama a `RemoveFromList`), no el handler. Dejar una línea a cero haría que el
+  total pareciera completo sin serlo.
+
+Que la cantidad llegue como `*float64` en `POST /api/mi-compra` es a propósito:
+ausente significa 1 (lo que quiere decir el botón de «añadir») y un 0 explícito
+significa quitar. En `PUT`, cantidad ausente es error, porque un `PUT` sin cantidad
+no puede querer decir «quítalo» y quitándolo en silencio.
+
+## Los errores de la lista y de los precios a mano no son fallos del servidor
+
+`internal/server/dominio.go` (`writeErrDominio`) decide el status mirando el mensaje
+que devuelve `store`, que ya viene en español:
+
+- **404** para «no existe»: los mensajes que contienen `no está en el catálogo` o
+  `no está en la lista`.
+- **400** para el resto de errores de dominio: cantidad <= 0, producto ya en la
+  lista, medidas incoherentes, JSON inválido, falta un campo obligatorio.
+- **500** para lo que no sea un error de petición: lo que no aparece en ninguna de
+  esas listas se deja en 500 a propósito, para no disfrazar un fallo de SQLite de
+  petición mala.
+
 ## Estado real de cada fase
 
 | Pieza | Estado | Notas |
@@ -224,11 +328,12 @@ al del DOM, que `net/html` ya viene desescapado. Las reglas completas están en
 | **Worker de la cola de precios** | **hecho** | `store.PriceLoop` (`priceloop.go`) consume la cola; `serve` lo arranca en segundo plano, `crawl precios` hace una pasada |
 | Nombre y categoría definitivos desde la ficha (`store.FichaData`) | **hecho** | Lo que arregla los productos de DÍA, que solo tenían la categoría |
 | SSE del progreso de la cola (`GET /api/eventos`) | **hecho** | Un evento `estado` cada 2 s por cadena |
+| **Precios puestos a mano** (`precios_manuales`, `/api/precios-manuales`) | **hecho** | Migración 3; tabla aparte de `products.price`, con `precioFuente` en el DTO de producto. Es lo que da precio a Alcampo, detrás de su WAF |
+| **«Mi compra»** (`list_items`, `/api/mi-compra`) | **hecho** | La tabla venía de la migración 1; ahora tiene API. El total solo suma precios de unidad y las líneas sin precio de unidad se cuentan aparte (`sinPrecio`, `avisoTotal`) |
 | Reanudar el indexado desde `crawl_state` | **pendiente** | Hoy `crawl index` relee el sitemap entero (el upsert hace que sea seguro) |
 | Recomprobación de un precio viejo al abrirlo | **pendiente** | El SSE ya avisa del progreso, no de un precio caducado |
-| SPA de Angular | **pendiente** | Hoy `GET /` es una página mínima que lista la API |
+| SPA de Angular | **pendiente** | Hoy `GET /` es una página mínima que lista la API; «Mi compra» y los precios a mano son endpoints, no interfaz |
 | «El mismo producto en otras tiendas» | **pendiente** | No hay agrupación entre cadenas |
-| «Mi lista» (`list_items`) con subtotales | **pendiente** | La tabla existe, vacía y sin endpoints |
 | Limpiar `store/prices.go` (herencia de la lista de la compra) | **pendiente** | `LastMatchPrices` consulta una tabla que ya no existe |
 
 ## Orden de lectura recomendado
@@ -240,19 +345,23 @@ al del DOM, que `net/html` ya viene desescapado. Las reglas completas están en
 3. `internal/server/server.go` — Las rutas de la API (y que no toca ninguna
    tienda).
 4. `internal/catalog/catalog.go` — Qué ve la web: DTO, cadenas y frescura.
-5. `internal/catalog/indexer.go` — Del sitemap a `products`.
-6. `internal/catalog/prices.go` — El pegamento entre los adaptadores y el bucle
+5. `internal/catalog/fase3.go` — La compra y los precios a mano: qué suma el
+   total y de dónde sale cada precio.
+6. `internal/store/lista.go` y `internal/store/manual.go` — Las dos tablas de la
+   compra, con el precio resuelto en SQL.
+7. `internal/catalog/indexer.go` — Del sitemap a `products`.
+8. `internal/catalog/prices.go` — El pegamento entre los adaptadores y el bucle
    de precios.
-7. `internal/chain/chain.go` — El puerto `Chain` y sus tipos.
-8. `internal/chain/ahorramas/` — Adaptador sencillo (HTTP + JSON-LD), el mejor
-   para empezar.
-9. `internal/chain/mercadona/` o `internal/chain/alcampo/` — Adaptadores con
-   navegador headless (`internal/chain/browser`).
-10. `internal/store/migrations.go` — El esquema y los triggers de FTS5.
-11. `internal/store/search.go` — Cómo se busca y cómo se ordenan los resultados.
-12. `internal/store/queue.go`, `priceloop.go` y `priceritmo.go` — La cola, el bucle
+9. `internal/chain/chain.go` — El puerto `Chain` y sus tipos.
+10. `internal/chain/ahorramas/` — Adaptador sencillo (HTTP + JSON-LD), el mejor
+    para empezar.
+11. `internal/chain/mercadona/` o `internal/chain/alcampo/` — Adaptadores con
+    navegador headless (`internal/chain/browser`).
+12. `internal/store/migrations.go` — El esquema y los triggers de FTS5.
+13. `internal/store/search.go` — Cómo se busca y cómo se ordenan los resultados.
+14. `internal/store/queue.go`, `priceloop.go` y `priceritmo.go` — La cola, el bucle
     que la consume y el ritmo/backoff.
-13. `internal/match/match.go` — Normalización y lematización.
+15. `internal/match/match.go` — Normalización y lematización.
 
 ## Reglas del proyecto
 

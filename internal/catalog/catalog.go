@@ -34,8 +34,11 @@ type Product struct {
 	// a peso, por ejemplo). Entonces no hay precio de unidad y no se puede
 	// sumar al total de la compra, pero el dato existe y hay que enseñarlo.
 	PrecioSoloMedida bool `json:"precioSoloMedida"`
-	PrecioViejo      bool `json:"precioViejo"`
-	FrescuraHoras    int  `json:"frescuraHoras"`
+	// PrecioFuente dice si el precio viene de la tienda o lo puso el usuario a
+	// mano. Alcampo está bloqueado por su WAF y se precio a mano.
+	PrecioFuente  string `json:"precioFuente"`
+	PrecioViejo   bool   `json:"precioViejo"`
+	FrescuraHoras int    `json:"frescuraHoras"`
 }
 
 // Chain es una cadena tal como la ve la web: su configuración y cuánto catálogo
@@ -148,6 +151,12 @@ func (c *Catalog) Search(ctx context.Context, q store.SearchQuery) ([]Product, i
 	for _, p := range res.Products {
 		out = append(out, toProduct(p, cadenas, maxHoras))
 	}
+	// Los precios manuales se resuelven de golpe para todos los resultados: una
+	// consulta por producto en una búsqueda de 50 líneas sería 50 consultas.
+	manuales := c.preciosManuales()
+	for i := range out {
+		aplicaPrecioManual(&out[i], manuales[out[i].Chain+"|"+out[i].URL])
+	}
 	return out, res.Total, res.HayMas, nil
 }
 
@@ -162,7 +171,55 @@ func (c *Catalog) Product(ctx context.Context, chainID, url string) (Product, bo
 	if ch, known := cadenas[chainID]; known && ch.PrecioMaxHoras > 0 {
 		maxHoras = ch.PrecioMaxHoras
 	}
-	return toProduct(p, cadenas, maxHoras), true, nil
+	dto := toProduct(p, cadenas, maxHoras)
+	aplicaPrecioManual(&dto, c.preciosManuales()[chainID+"|"+url])
+	return dto, true, nil
+}
+
+// preciosManuales indexa los preciosmanuales por cadena y URL. Si no se pueden
+// leer, se sigue con los precios de la tienda: que falle un dato mío no puede
+// dejar la web sin catálogo.
+func (c *Catalog) preciosManuales() map[string]store.PrecioManual {
+	manuales, err := c.store.PreciosManuales()
+	if err != nil {
+		return map[string]store.PrecioManual{}
+	}
+	salida := make(map[string]store.PrecioManual, len(manuales))
+	for _, m := range manuales {
+		salida[m.Chain+"|"+m.ProductURL] = m
+	}
+	return salida
+}
+
+// aplicaPrecioManual sustituye el precio de la tienda por el que puso el usuario,
+// si lo hay. Un precio manual cuenta como recién escrito, así que no sale como
+// caducado aunque el de la tienda sea viejo.
+func aplicaPrecioManual(p *Product, m store.PrecioManual) {
+	// Sin marca de tiempo no hay precio manual: el map devuelve el valor cero.
+	if m.Actualizado.IsZero() {
+		p.PrecioFuente = FuenteWeb
+		if p.Precio <= 0 && p.PrecioMedida > 0 {
+			p.PrecioFuente = FuenteNinguno
+		}
+		return
+	}
+	p.PrecioFuente = FuenteManual
+	if m.Precio > 0 {
+		p.Precio = m.Precio
+		p.PrecioBase = "unidad"
+		p.TienePrecio = true
+		p.PrecioSoloMedida = false
+	}
+	if m.PrecioMedida > 0 {
+		p.PrecioMedida = m.PrecioMedida
+		p.MedidaUnidad = m.Medida
+	}
+	if m.Precio <= 0 && m.PrecioMedida > 0 {
+		p.PrecioSoloMedida = true
+		p.PrecioFuente = FuenteNinguno
+	}
+	p.PrecioEn = m.Actualizado
+	p.FrescuraHoras = 0
 }
 
 func toProduct(p store.Product, cadenas map[string]store.Chain, maxHoras int) Product {

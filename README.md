@@ -2,14 +2,17 @@
 
 Catálogo de precios de **Mercadona, Ahorramas, DÍA y Alcampo**. El programa
 indexa los catálogos de las cuatro tiendas en una base SQLite y sirve una **API
-JSON** para buscar productos, ver su precio por unidad y por peso (€/kg, €/L) y
-comparar entre tiendas. Dentro de poco habrá una SPA de Angular encima de esa
-misma API (fase 2); hoy la web es una página mínima que la lista.
+JSON** para buscar productos, ver su precio por unidad y por peso (€/kg, €/L),
+comparar entre tiendas y llevar una **«Mi compra»** con subtotales y total. Dentro
+de poco habrá una SPA de Angular encima de esa misma API (fase 2); hoy la web es
+una página mínima que la lista.
 
-> Esto **ya no** es un comparador de listas de la compra. No existe `lista.md`, ni
-> se escriben informes markdown, ni se resuelve una compra automáticamente: el
-> usuario navega el catálogo y compara él. Los ficheros `datos/*.md` que veas en
-> tu máquina son restos de la versión anterior y no los genera nada.
+> Esto **ya no** es un comparador automático de listas de la compra: no existe
+> `lista.md`, no se escriben informes markdown y **no se resuelve ni se optimiza
+> una compra**. La persona navega el catálogo, compara y elige. Lo que sí hay es
+> una lista propia para apuntar lo que va a comprar y ver cuánto suma, y precios
+> que puedes escribir a mano cuando la tienda no los da. Los ficheros `datos/*.md`
+> que veas en tu máquina son restos de la versión anterior y no los genera nada.
 
 ## Estado actual
 
@@ -21,7 +24,7 @@ Indexado con `crawl index` contra las cuatro tiendas (106.226 productos, base de
 | Mercadona | 4.320     | sí              | El nombre sale del slug, pero **la medida no** (aparece al visitar la ficha) |
 | Ahorramas | 4.536     | sí              | Nombre y medida salen del slug (3.039 con medida) |
 | DÍA       | 7.755     | sí              | Su sitemap **no trae el nombre**, solo la categoría; se marca `ficha_pendiente` para que la cola le ponga el nombre real |
-| Alcampo   | 89.615    | **no**          | Su WAF responde 403 a las fichas, así que entra el catálogo pero no el precio (el nombre y la medida sí salen del slug) |
+| Alcampo   | 89.615    | **no**          | Su WAF responde 403 a las fichas, así que entra el catálogo pero no el precio (el nombre y la medida sí salen del slug). El precio lo pones tú a mano, con `/api/precios-manuales` |
 
 Dos cosas que conviene no confundir:
 
@@ -158,6 +161,14 @@ tienda: solo lee y escribe en la base.
 | `GET /api/catalogo?q=&cadena=&conPrecio=&orden=&offset=&limite=` | Búsqueda paginada |
 | `GET /api/producto?cadena=&url=` | Un producto por cadena y URL |
 | `GET /api/eventos` | Server-Sent Events con el estado de la cola de precios (un evento `estado` cada 2 s) |
+| `GET /api/mi-compra` | La compra: líneas, subtotal por tienda, total, `sinPrecio` y `avisoTotal` |
+| `POST /api/mi-compra` | Añade un producto; 201 con la lista ya actualizada |
+| `PUT /api/mi-compra` | Cambia la cantidad (`cantidad` 0 o menor lo quita) |
+| `DELETE /api/mi-compra?cadena=&url=` | Quita un producto; sin parámetros, vacía la lista |
+| `GET /api/precios-manuales` | Todos los precios puestos a mano, con el nombre del producto |
+| `GET /api/precios-manuales?cadena=&url=` | Uno, o 404 si esa ficha no tiene precio a mano |
+| `PUT`/`POST /api/precios-manuales` | Guarda un precio a mano (`POST` es alias de `PUT`) |
+| `DELETE /api/precios-manuales?cadena=&url=` | Quita el precio a mano de una ficha |
 | `GET /api/version` | Versión |
 | `GET /` | Página HTML mínima que lista la API (la SPA llega en la fase 2) |
 
@@ -189,7 +200,7 @@ curl -N http://127.0.0.1:8080/api/eventos
 `precio`, `precioBase` (`unidad` o `kg`: así lo publica la tienda),
 `precioMedida` (por kg o l, que es lo comparable), `medidaValor`,
 `medidaUnidad`, `url` (enlace a la ficha), `tienePrecio`, `precioSoloMedida`,
-`precioViejo` y `frescuraHoras`:
+`precioFuente`, `precioViejo` y `frescuraHoras`:
 
 ```json
 {
@@ -211,6 +222,7 @@ curl -N http://127.0.0.1:8080/api/eventos
   "nombreFuente": "slug",
   "tienePrecio": false,
   "precioSoloMedida": false,
+  "precioFuente": "ninguno",
   "precioViejo": false,
   "frescuraHoras": 0
 }
@@ -225,6 +237,159 @@ recomprobarlo.
 Un `precio: 0` con `precioSoloMedida: true` es otro caso: la tienda **solo**
 publica €/kg o €/l (los plátanos, que se venden al peso), así que no hay precio de
 unidad que guardar y el dato está en `precioMedida`. No es un dato que falte.
+
+`precioFuente` dice de dónde sale **el precio de unidad** que se enseña y se suma
+a un total: `web` (lo sacamos de la tienda), `manual` (lo puso el usuario, con
+`/api/precios-manuales`) o `ninguno` (no hay precio de unidad). **Ojo con
+`ninguno`**: no significa «no hay precio de ningún tipo», sino que no hay precio de
+unidad. Un producto vendido al peso sale con `ninguno` aunque su €/kg venga de la
+web, porque de un €/kg no sale el precio de una bolsa.
+
+## Precios que pones tú
+
+Alcampo está detrás de un WAF que responde 403 a los clientes automatizados: su
+catálogo se lee (89.615 productos) pero de sus fichas no sale ningún precio, y no
+se intenta saltarse ese WAF. Para saber cuánto costaría la compra ahí, escribes a
+mano el precio que ves en la tienda. Lo mismo sirve para cualquier precio que hayas
+visto en el lineal y no esté en la web.
+
+Es **tu dato, no el de la tienda**, y por eso va a su propia tabla: guardar un
+precio a mano no toca el precio que publica la web, ni al revés. Solo se puede
+guardar para un producto que esté en el catálogo (si no, un 404 lo dice), y
+`precioMedida` solo admite `kg` o `l`.
+
+```sh
+# Un producto de Alcampo a 1,25 € (la URL hay que codificarla)
+curl -s -X PUT http://127.0.0.1:8080/api/precios-manuales \
+  -H 'Content-Type: application/json' \
+  --data '{"cadena":"alcampo","url":"https://www.compraonline.alcampo.es/products/kin-enjuague-bucal/894645","precio":1.25,"nota":"precio del lineal"}'
+
+# Solo precio por medida (lo vendido al peso): "KG" y "kg" son lo mismo
+curl -s -X PUT http://127.0.0.1:8080/api/precios-manuales \
+  -H 'Content-Type: application/json' \
+  --data '{"cadena":"alcampo","url":"https://www.compraonline.alcampo.es/products/platanos/2","precio":0,"precioMedida":1.75,"medida":"KG"}'
+
+# Todos, con el nombre; o solo uno
+curl -s http://127.0.0.1:8080/api/precios-manuales
+curl -s --get http://127.0.0.1:8080/api/precios-manuales \
+  --data-urlencode 'cadena=alcampo' --data-urlencode 'url=...'
+
+# Quitarlo (el de la tienda, si lo había, se queda como estaba)
+curl -s -X DELETE --get http://127.0.0.1:8080/api/precios-manuales \
+  --data-urlencode 'cadena=alcampo' --data-urlencode 'url=...'
+```
+
+Un precio manual manda en el subtotal de su línea (`precioFuente: "manual"` en la
+línea) y cuenta como recién escrito: el producto no sale como caducado aunque el
+precio de la tienda sea viejo. Borrarlo no toca el de la tienda.
+
+## Mi compra
+
+`/api/mi-compra` es la lista de lo que vas a comprar, con lo que suma por tienda y
+el total. La cantidad es un número real, así que 1,5 kg de plátanos es una cantidad
+válida:
+
+```sh
+# Añadir un producto (sin "cantidad" cuenta como 1). Responde 201 con la lista entera
+curl -s -X POST http://127.0.0.1:8080/api/mi-compra \
+  -H 'Content-Type: application/json' \
+  --data '{"cadena":"mercadona","url":"https://tienda.mercadona.es/product/3723/fresas-bandeja"}'
+
+# Cambiar la cantidad; con 0 o menos lo quita
+curl -s -X PUT http://127.0.0.1:8080/api/mi-compra \
+  -H 'Content-Type: application/json' \
+  --data '{"cadena":"mercadona","url":"https://tienda.mercadona.es/product/3723/fresas-bandeja","cantidad":2}'
+
+# Verlo todo
+curl -s http://127.0.0.1:8080/api/mi-compra
+
+# Quitar un producto, o vaciar la lista entera (sin parámetros)
+curl -s -X DELETE --get http://127.0.0.1:8080/api/mi-compra \
+  --data-urlencode 'cadena=mercadona' --data-urlencode 'url=...'
+curl -s -X DELETE http://127.0.0.1:8080/api/mi-compra
+```
+
+La respuesta trae `items` (una línea por producto), `subtotalPorCadena` (solo las
+tiendas con algo que sumar, de mayor a menor), `total`, `sinPrecio`,
+`sinPrecioDetalle` y `avisoTotal`. Con una leche de Mercadona a 1,10 € × 2, un pan
+de Alcampo con precio manual a 1,25 € × 1 y plátanos que solo se publican por kilos
+(1,65 €/kg):
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "cadena": "mercadona",
+      "nombreCadena": "Mercadona",
+      "url": "https://tienda.mercadona.es/product/1/leche",
+      "nombre": "Leche entera",
+      "formato": "1 L",
+      "cantidad": 2,
+      "precio": 1.1,
+      "precioFuente": "web",
+      "precioMedida": 1.1,
+      "medida": "l",
+      "precioSoloMedida": false,
+      "subtotal": 2.2,
+      "añadido": "2026-10-02T10:00:00Z"
+    },
+    {
+      "id": 2,
+      "cadena": "alcampo",
+      "nombreCadena": "Alcampo",
+      "url": "https://www.alcampo.es/products/pan/1",
+      "nombre": "Pan de molde",
+      "formato": "600 g",
+      "cantidad": 1,
+      "precio": 1.25,
+      "precioFuente": "manual",
+      "precioMedida": 0,
+      "medida": "",
+      "precioSoloMedida": false,
+      "subtotal": 1.25,
+      "añadido": "2026-10-02T10:01:00Z"
+    },
+    {
+      "id": 3,
+      "cadena": "alcampo",
+      "nombreCadena": "Alcampo",
+      "url": "https://www.alcampo.es/products/platanos/2",
+      "nombre": "Plátanos",
+      "formato": "",
+      "cantidad": 1,
+      "precio": 0,
+      "precioFuente": "ninguno",
+      "precioMedida": 1.65,
+      "medida": "kg",
+      "precioSoloMedida": true,
+      "subtotal": 0,
+      "añadido": "2026-10-02T10:02:00Z"
+    }
+  ],
+  "subtotalPorCadena": [
+    {"cadena": "mercadona", "nombre": "Mercadona", "subtotal": 2.2},
+    {"cadena": "alcampo", "nombre": "Alcampo", "subtotal": 1.25}
+  ],
+  "total": 3.45,
+  "sinPrecio": 1,
+  "sinPrecioDetalle": ["Plátanos"],
+  "avisoTotal": "El total no incluye 1 línea por no tener precio de unidad: o la tienda solo publica el precio por medida (€/kg o €/l), que no dice cuánto cuesta una bolsa, o todavía no hay precio para esa ficha. Están en sinPrecioDetalle, sin estimar nada."
+}
+```
+
+**El total solo suma precios de unidad**, y esa es la parte que conviene entender
+antes de fiarse de él. Lo vendido al peso (plátanos a 1,65 €/kg) no tiene precio de
+unidad: su `precio` está a 0 **a propósito** y de un €/kg no se puede saber cuánto
+cuesta una bolsa. Multiplicar el €/kg por una cantidad inventada daría un total
+falso, y **un total falso es peor que un total con huecos**, así que esas líneas no
+se estiman: se cuentan aparte.
+
+`sinPrecio` cuenta **toda línea cuyo precio sea 0 o menor**, así que no es solo «lo
+vendido al peso»: también entra lo que todavía no tiene precio, como una ficha de
+Alcampo sin precio escrito o una que la cola todavía no ha descargado.
+`sinPrecioDetalle` dice cuáles son, y `avisoTotal` lo explica en una frase (va vacío
+cuando no hay ninguna). Si `sinPrecio` es 0, el total sí está completo.
 
 ## Configuración
 
@@ -274,23 +439,25 @@ categorías, no productos concretos.
 **Alcampo.** Su catálogo se lee muy bien (89.615 productos), pero las fichas están
 detrás de un WAF que responde 403 a los clientes automatizados, así que no sale
 ningún precio. De ahí que venga con `precios_activos = 0`. **No se intenta
-saltarse ese WAF.**
+saltarse ese WAF.** Para eso están los precios que pones tú a mano: como sus fichas
+están catalogadas pero sin precio, escribes lo que ves en el tienda y ya puedes
+sumarlo en «Mi compra».
 
 ## Qué no existe todavía
 
 Para no prometer nada que no esté en el repo:
 
 - **La SPA de Angular.** Hoy `GET /` devuelve una página HTML mínima que lista la
-  API. La API está lista; la web no.
+  API. La API está lista; la web no. «Mi compra» y los precios a mano son
+  endpoints y tablas: de interfaz no hay nada.
 - **La comparación «en otras tiendas».** No hay ninguna vista que agrupe el mismo
   producto entre cadenas: la comparación la hace la persona, producto a producto,
   con `precioMedida` a la vista.
-- **«Mi lista».** La tabla `list_items` existe y está vacía, pero no hay
-  endpoints ni nada que la use: sin añadir productos, sin subtotales ni total.
 - Tampoco hay: recomprobación de un precio viejo al abrirlo (el SSE solo avisa
   del progreso de la cola, no de un precio caducado) ni consulta del histórico de
   cambios por la API (`store.Changes` existe en el código, pero ningún endpoint
-  lo llama).
+  lo llama) ni reanudar el indexado desde `crawl_state` (`crawl index` relee el
+  sitemap entero).
 
 ## Scraping responsable
 
